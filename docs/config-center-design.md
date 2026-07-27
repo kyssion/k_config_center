@@ -1,0 +1,545 @@
+# 配置中心设计文档（Config Center Design）
+
+> 项目：k_config_center（ASP.NET Core）
+> 数据库：PostgreSQL 14+ | ORM：SqlSugar
+> 配套 DDL 脚本：`docs/sql/config_center_schema.sql`
+
+---
+
+## 1. 概述与层级模型
+
+配置中心用于集中管理应用配置，支持多命名空间、多环境隔离，配置具备**版本快照、发布/回滚、状态机、软删除**能力。层级模型为：
+
+```
+namespace（命名空间，业务线/团队级隔离，默认 public）
+└── env（环境：dev / test / staging / prod）
+    └── config_group（配置组：一组相关配置的集合，如某个微服务）
+        └── config（配置项：key + content，带格式、版本、状态）
+            └── config_version（历史版本快照，不可变，线性递增）
+```
+
+ASCII 结构示例：
+
+```
+public (namespace)
+├── dev (env)
+│   ├── order-service (group)
+│   │   ├── appsettings          [json]   PUBLISHED  v5
+│   │   └── redis.connection     [text]   PUBLISHED  v2
+│   └── user-service (group)
+│       └── logging              [yaml]   DRAFT      v0
+└── prod (env)
+    └── order-service (group)
+        └── appsettings          [json]   PUBLISHED  v12
+```
+
+## 2. ER 关系说明
+
+```
+cc_namespace 1 ──── * cc_env
+cc_namespace 1 ──── * cc_config_group
+cc_env       1 ──── * cc_config_group
+cc_config_group 1 ─ * cc_config
+cc_config    1 ──── * cc_config_version
+cc_config    * ──── 1 cc_config_version   (published_version_id，延迟外键)
+cc_operation_log ──── 仅存 ID，无外键约束
+```
+
+| 关系 | 说明 |
+|------|------|
+| cc_env.namespace_id → cc_namespace.id | 环境隶属命名空间，`UNIQUE(namespace_id, env_code)` 保证命名空间内环境编码唯一 |
+| cc_config_group.env_id → cc_env.id | 配置组隶属环境，`UNIQUE(env_id, group_name)` 保证环境内组名唯一 |
+| cc_config.group_id → cc_config_group.id | 配置项隶属配置组，`uk_config_key` 部分唯一索引保证组内 key 唯一（未软删除范围） |
+| cc_config.namespace_id / env_id | **冗余字段**，客户端高频按 namespace+env 读取时避免三表 JOIN |
+| cc_config_version.config_id → cc_config.id | 发布历史快照，`UNIQUE(config_id, version_no)` 保证版本号唯一 |
+| cc_config.published_version_id → cc_config_version.id | 指向当前生效版本；因两表互相引用，该外键在两表建成后 `ALTER TABLE` 延迟添加 |
+| cc_operation_log | 审计流水，只记录各级 ID，不建外键，避免拖累主表写入/删除 |
+
+关键字段用途：
+
+- `cc_config.md5`：当前内容摘要，用于「有未发布变更」判断与客户端长轮询变更探测。
+- `cc_config.latest_version_no`：已发布的最大版本号，发布时 +1；0 表示从未发布。
+- `cc_config.published_version_id`：当前对外生效的版本快照 ID。
+- `cc_config.deleted_at`：软删除标记，NULL 表示有效。
+
+## 3. 表结构详细说明
+
+### 3.1 cc_namespace 命名空间表
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT IDENTITY | 自增主键 |
+| namespace_id | VARCHAR(128) | 命名空间业务标识，全局唯一，默认 `'public'` |
+| name | VARCHAR(128) | 显示名称 |
+| description | VARCHAR(512) | 描述 |
+| status | SMALLINT | 状态：1=启用，0=禁用，默认 1 |
+| created_by / updated_by | VARCHAR(64) | 创建人 / 最后修改人 |
+| created_at / updated_at | TIMESTAMPTZ | 创建 / 更新时间，默认 `now()` |
+
+脚本末尾初始化一条 `public` 命名空间记录。
+
+### 3.2 cc_env 环境表
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT IDENTITY | 自增主键 |
+| namespace_id | BIGINT | 外键 → cc_namespace(id) |
+| env_code | VARCHAR(64) | 环境编码（dev/test/staging/prod），`UNIQUE(namespace_id, env_code)` |
+| name | VARCHAR(128) | 显示名称 |
+| description | VARCHAR(512) | 描述 |
+| sort_order | INT | 排序值，默认 0 |
+| status | SMALLINT | 状态，默认 1 |
+| created_at / updated_at | TIMESTAMPTZ | 时间戳，默认 `now()` |
+
+### 3.3 cc_config_group 配置组表
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT IDENTITY | 自增主键 |
+| namespace_id | BIGINT | 外键 → cc_namespace(id) |
+| env_id | BIGINT | 外键 → cc_env(id) |
+| group_name | VARCHAR(128) | 组名，`UNIQUE(env_id, group_name)` |
+| description | VARCHAR(512) | 描述 |
+| status | SMALLINT | 状态，默认 1 |
+| created_by / updated_by | VARCHAR(64) | 操作人 |
+| created_at / updated_at | TIMESTAMPTZ | 时间戳 |
+
+索引：`idx_group_ns_env(namespace_id, env_id)`。
+
+### 3.4 cc_config 配置表（当前态）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT IDENTITY | 自增主键 |
+| group_id | BIGINT | 外键 → cc_config_group(id) |
+| namespace_id | BIGINT | 冗余命名空间 ID，避免 JOIN |
+| env_id | BIGINT | 冗余环境 ID，避免 JOIN |
+| config_key | VARCHAR(256) | 配置键 |
+| content | TEXT | 当前（编辑态）内容 |
+| format | VARCHAR(16) | 默认 `'text'`，CHECK IN ('text','json','yaml','properties','xml','toml') |
+| md5 | CHAR(32) | 当前内容 MD5 |
+| description | VARCHAR(512) | 描述 |
+| tags | VARCHAR(256) | 标签，逗号分隔 |
+| status | VARCHAR(16) | 默认 `'DRAFT'`，CHECK IN ('DRAFT','PUBLISHED','OFFLINE') |
+| published_version_id | BIGINT | 指向生效版本，外键 → cc_config_version(id)（延迟建立） |
+| latest_version_no | BIGINT | 最新版本号，默认 0 |
+| published_at | TIMESTAMPTZ | 最近发布时间 |
+| deleted_at | TIMESTAMPTZ | 软删除时间，NULL=未删除 |
+| created_by / updated_by | VARCHAR(64) | 操作人 |
+| created_at / updated_at | TIMESTAMPTZ | 时间戳 |
+
+索引：
+
+- 部分唯一索引：`CREATE UNIQUE INDEX uk_config_key ON cc_config (group_id, config_key) WHERE deleted_at IS NULL;`
+- 查询索引：`idx_config_ns_env(namespace_id, env_id, status)`。
+
+### 3.5 cc_config_version 配置版本表（历史快照，不可变）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT IDENTITY | 自增主键 |
+| config_id | BIGINT | 外键 → cc_config(id) |
+| version_no | BIGINT | 版本号，`UNIQUE(config_id, version_no)` |
+| content | TEXT | 该版本内容快照 |
+| format | VARCHAR(16) | 该版本格式 |
+| md5 | CHAR(32) | 该版本内容 MD5 |
+| change_type | VARCHAR(16) | CHECK IN ('CREATE','UPDATE','DELETE','ROLLBACK','IMPORT') |
+| change_remark | VARCHAR(512) | 变更备注 |
+| created_by | VARCHAR(64) | 操作人 |
+| created_at | TIMESTAMPTZ | 创建时间 |
+
+索引：`idx_version_config(config_id, version_no DESC)`。快照写入后不再修改。
+
+### 3.6 cc_operation_log 操作日志表
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT IDENTITY | 自增主键 |
+| namespace_id / env_id / group_id / config_id | BIGINT | 各级 ID，**无外键约束** |
+| operation | VARCHAR(32) | CREATE/UPDATE/PUBLISH/ROLLBACK/OFFLINE/DELETE |
+| detail | JSONB | 操作详情（如变更前后 diff、请求参数） |
+| operator | VARCHAR(64) | 操作人 |
+| client_ip | VARCHAR(64) | 来源 IP |
+| created_at | TIMESTAMPTZ | 操作时间 |
+
+索引：`idx_oplog_config(config_id, created_at DESC)`。
+
+## 4. 版本与发布机制
+
+### 4.1 编辑（DRAFT / 未发布变更）
+
+- 新建配置：写入 `cc_config`，`status='DRAFT'`，`latest_version_no=0`，计算 `md5`。
+- 修改配置：只更新 `cc_config.content / md5 / format` 等当前态字段，**不产生版本记录**。
+- 「有未发布变更」的判定：`cc_config.md5` ≠ `published_version_id` 指向的 `cc_config_version.md5`（或从未发布）。界面上可据此展示"待发布"标记。
+
+### 4.2 发布（PUBLISH）
+
+事务内执行：
+
+1. `latest_version_no = latest_version_no + 1`；
+2. 将当前 `content/format/md5` 写入 `cc_config_version`（`version_no = 新版本号`，`change_type='CREATE'`（首发）或 `'UPDATE'`）；
+3. 更新 `cc_config.published_version_id = 新快照 id`，`status='PUBLISHED'`，`published_at=now()`；
+4. 写 `cc_operation_log`（operation='PUBLISH'）。
+
+### 4.3 回滚（ROLLBACK）
+
+回滚**不回退版本号**，而是以历史版本内容生成一个新版本，保持版本线性递增、历史可追溯：
+
+1. 取目标历史版本 `cc_config_version(version_no=N)` 的 content/format/md5；
+2. `latest_version_no + 1`，写入新快照，`change_type='ROLLBACK'`，备注中记录"回滚自 vN"；
+3. 更新 `cc_config` 当前态内容和 `published_version_id`；
+4. 写操作日志（operation='ROLLBACK'）。
+
+### 4.4 客户端读取与变更探测
+
+- 读取路径：按 `namespace + env + group (+ key)` 查询，命中 `idx_config_ns_env` / `uk_config_key`；只返回 `status='PUBLISHED' AND deleted_at IS NULL` 的记录，内容取 `published_version_id` 指向的版本快照（保证读到的是"已发布内容"而非编辑中的草稿）。
+- 变更探测（长轮询）：客户端携带本地缓存的 `md5` 发起长轮询；服务端对比生效版本的 md5，不一致（或超时）立即返回，客户端再拉取最新内容。md5 对比成本低，适合高频探测。
+
+## 5. 状态机说明
+
+```
+            publish              offline
+  DRAFT ────────────► PUBLISHED ────────► OFFLINE
+    ▲                     │  ▲               │
+    │      edit(内容变更但  │  └── publish ────┘   （重新发布可恢复上线）
+    │      状态保持已发布)  │
+    └─────────────────────┘（未发布过的编辑态）
+
+  任意状态 ──delete──► 软删除（deleted_at = now()，status 不变）
+```
+
+- **DRAFT**：新建后未发布，客户端不可见。
+- **PUBLISHED**：已发布生效；再次编辑不改变状态，仅产生"未发布变更"。
+- **OFFLINE**：主动下线，客户端不可见，但保留全部版本历史，可重新发布上线。
+- **软删除**：置 `deleted_at`，部分唯一索引 `uk_config_key` 自动放行同 key 重建；版本与日志保留可审计。
+
+## 6. SqlSugar 映射说明
+
+### 6.1 命名映射策略（二选一）
+
+本方案采用 **方式 A：属性 PascalCase + `ColumnName` 显式映射 snake_case**，映射关系一目了然、不依赖全局约定，以下实体示例均按此编写。
+
+另一种可选方式 B 是全局 `EntityService` 自动转换（实体上无需逐列写 ColumnName）：
+
+```csharp
+var db = new SqlSugarClient(config, client =>
+{
+    client.CurrentConnectionConfig.ConfigureExternalServices = new ConfigureExternalServices
+    {
+        EntityService = (property, column) =>
+        {
+            // PascalCase -> snake_case，如 ConfigKey -> config_key
+            column.DbColumnName = UtilMethods.ToUnderLine(column.DbColumnName);
+        }
+    };
+});
+```
+
+### 6.2 类型选型建议
+
+- **TIMESTAMPTZ**：建议实体使用 `DateTimeOffset` / `DateTimeOffset?`，与"含时区时间戳"语义精确对应（Npgsql 原生支持）。若团队习惯 `DateTime`，需保证全链路统一使用 UTC（Npgsql 6+ 要求 timestamptz 写入 `DateTimeKind.Utc`），否则易踩时区坑。**推荐 DateTimeOffset**。
+- **JSONB**（`cc_operation_log.detail`）：
+  - 若属性为强类型对象/字典：`[SugarColumn(ColumnName = "detail", IsJson = true, ColumnDataType = "jsonb", IsNullable = true)]`，SqlSugar 自动序列化/反序列化；
+  - 若属性为 `string`（存原始 JSON 文本）：只需 `ColumnDataType = "jsonb"`，不加 `IsJson`。
+  - 下面示例采用 `string` + `ColumnDataType = "jsonb"`，最简单直观。
+- **SMALLINT** → `short`；**BIGINT** → `long`；**CHAR(32)/VARCHAR/TEXT** → `string`。
+- 主键均为数据库 IDENTITY 自增：`[SugarColumn(IsPrimaryKey = true, IsIdentity = true)]`，插入时无需赋值。
+
+### 6.3 实体类示例（仅示例，不落地为 .cs 文件）
+
+```csharp
+using SqlSugar;
+
+[SugarTable("cc_namespace")]
+public class CcNamespace
+{
+    [SugarColumn(ColumnName = "id", IsPrimaryKey = true, IsIdentity = true)]
+    public long Id { get; set; }
+
+    [SugarColumn(ColumnName = "namespace_id", Length = 128)]
+    public string NamespaceId { get; set; } = "public";
+
+    [SugarColumn(ColumnName = "name", Length = 128)]
+    public string Name { get; set; } = string.Empty;
+
+    [SugarColumn(ColumnName = "description", Length = 512, IsNullable = true)]
+    public string? Description { get; set; }
+
+    [SugarColumn(ColumnName = "status")]
+    public short Status { get; set; } = 1;
+
+    [SugarColumn(ColumnName = "created_by", Length = 64, IsNullable = true)]
+    public string? CreatedBy { get; set; }
+
+    [SugarColumn(ColumnName = "updated_by", Length = 64, IsNullable = true)]
+    public string? UpdatedBy { get; set; }
+
+    [SugarColumn(ColumnName = "created_at", ColumnDataType = "timestamptz")]
+    public DateTimeOffset CreatedAt { get; set; }
+
+    [SugarColumn(ColumnName = "updated_at", ColumnDataType = "timestamptz")]
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+```
+
+```csharp
+[SugarTable("cc_env")]
+public class CcEnv
+{
+    [SugarColumn(ColumnName = "id", IsPrimaryKey = true, IsIdentity = true)]
+    public long Id { get; set; }
+
+    [SugarColumn(ColumnName = "namespace_id")]
+    public long NamespaceId { get; set; }
+
+    [SugarColumn(ColumnName = "env_code", Length = 64)]
+    public string EnvCode { get; set; } = string.Empty;   // dev/test/staging/prod
+
+    [SugarColumn(ColumnName = "name", Length = 128)]
+    public string Name { get; set; } = string.Empty;
+
+    [SugarColumn(ColumnName = "description", Length = 512, IsNullable = true)]
+    public string? Description { get; set; }
+
+    [SugarColumn(ColumnName = "sort_order")]
+    public int SortOrder { get; set; }
+
+    [SugarColumn(ColumnName = "status")]
+    public short Status { get; set; } = 1;
+
+    [SugarColumn(ColumnName = "created_at", ColumnDataType = "timestamptz")]
+    public DateTimeOffset CreatedAt { get; set; }
+
+    [SugarColumn(ColumnName = "updated_at", ColumnDataType = "timestamptz")]
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+```
+
+```csharp
+[SugarTable("cc_config_group")]
+public class CcConfigGroup
+{
+    [SugarColumn(ColumnName = "id", IsPrimaryKey = true, IsIdentity = true)]
+    public long Id { get; set; }
+
+    [SugarColumn(ColumnName = "namespace_id")]
+    public long NamespaceId { get; set; }
+
+    [SugarColumn(ColumnName = "env_id")]
+    public long EnvId { get; set; }
+
+    [SugarColumn(ColumnName = "group_name", Length = 128)]
+    public string GroupName { get; set; } = string.Empty;
+
+    [SugarColumn(ColumnName = "description", Length = 512, IsNullable = true)]
+    public string? Description { get; set; }
+
+    [SugarColumn(ColumnName = "status")]
+    public short Status { get; set; } = 1;
+
+    [SugarColumn(ColumnName = "created_by", Length = 64, IsNullable = true)]
+    public string? CreatedBy { get; set; }
+
+    [SugarColumn(ColumnName = "updated_by", Length = 64, IsNullable = true)]
+    public string? UpdatedBy { get; set; }
+
+    [SugarColumn(ColumnName = "created_at", ColumnDataType = "timestamptz")]
+    public DateTimeOffset CreatedAt { get; set; }
+
+    [SugarColumn(ColumnName = "updated_at", ColumnDataType = "timestamptz")]
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+```
+
+```csharp
+[SugarTable("cc_config")]
+public class CcConfig
+{
+    [SugarColumn(ColumnName = "id", IsPrimaryKey = true, IsIdentity = true)]
+    public long Id { get; set; }
+
+    [SugarColumn(ColumnName = "group_id")]
+    public long GroupId { get; set; }
+
+    [SugarColumn(ColumnName = "namespace_id")]
+    public long NamespaceId { get; set; }          // 冗余，避免 JOIN
+
+    [SugarColumn(ColumnName = "env_id")]
+    public long EnvId { get; set; }                // 冗余，避免 JOIN
+
+    [SugarColumn(ColumnName = "config_key", Length = 256)]
+    public string ConfigKey { get; set; } = string.Empty;
+
+    [SugarColumn(ColumnName = "content", ColumnDataType = "text", IsNullable = true)]
+    public string? Content { get; set; }
+
+    [SugarColumn(ColumnName = "format", Length = 16)]
+    public string Format { get; set; } = "text";   // text/json/yaml/properties/xml/toml
+
+    [SugarColumn(ColumnName = "md5", Length = 32, IsNullable = true)]
+    public string? Md5 { get; set; }
+
+    [SugarColumn(ColumnName = "description", Length = 512, IsNullable = true)]
+    public string? Description { get; set; }
+
+    [SugarColumn(ColumnName = "tags", Length = 256, IsNullable = true)]
+    public string? Tags { get; set; }
+
+    [SugarColumn(ColumnName = "status", Length = 16)]
+    public string Status { get; set; } = "DRAFT";  // DRAFT/PUBLISHED/OFFLINE
+
+    [SugarColumn(ColumnName = "published_version_id", IsNullable = true)]
+    public long? PublishedVersionId { get; set; }
+
+    [SugarColumn(ColumnName = "latest_version_no")]
+    public long LatestVersionNo { get; set; }
+
+    [SugarColumn(ColumnName = "published_at", ColumnDataType = "timestamptz", IsNullable = true)]
+    public DateTimeOffset? PublishedAt { get; set; }
+
+    [SugarColumn(ColumnName = "deleted_at", ColumnDataType = "timestamptz", IsNullable = true)]
+    public DateTimeOffset? DeletedAt { get; set; } // 软删除标记
+
+    [SugarColumn(ColumnName = "created_by", Length = 64, IsNullable = true)]
+    public string? CreatedBy { get; set; }
+
+    [SugarColumn(ColumnName = "updated_by", Length = 64, IsNullable = true)]
+    public string? UpdatedBy { get; set; }
+
+    [SugarColumn(ColumnName = "created_at", ColumnDataType = "timestamptz")]
+    public DateTimeOffset CreatedAt { get; set; }
+
+    [SugarColumn(ColumnName = "updated_at", ColumnDataType = "timestamptz")]
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+```
+
+```csharp
+[SugarTable("cc_config_version")]
+public class CcConfigVersion
+{
+    [SugarColumn(ColumnName = "id", IsPrimaryKey = true, IsIdentity = true)]
+    public long Id { get; set; }
+
+    [SugarColumn(ColumnName = "config_id")]
+    public long ConfigId { get; set; }
+
+    [SugarColumn(ColumnName = "version_no")]
+    public long VersionNo { get; set; }
+
+    [SugarColumn(ColumnName = "content", ColumnDataType = "text", IsNullable = true)]
+    public string? Content { get; set; }
+
+    [SugarColumn(ColumnName = "format", Length = 16, IsNullable = true)]
+    public string? Format { get; set; }
+
+    [SugarColumn(ColumnName = "md5", Length = 32, IsNullable = true)]
+    public string? Md5 { get; set; }
+
+    [SugarColumn(ColumnName = "change_type", Length = 16)]
+    public string ChangeType { get; set; } = "UPDATE"; // CREATE/UPDATE/DELETE/ROLLBACK/IMPORT
+
+    [SugarColumn(ColumnName = "change_remark", Length = 512, IsNullable = true)]
+    public string? ChangeRemark { get; set; }
+
+    [SugarColumn(ColumnName = "created_by", Length = 64, IsNullable = true)]
+    public string? CreatedBy { get; set; }
+
+    [SugarColumn(ColumnName = "created_at", ColumnDataType = "timestamptz")]
+    public DateTimeOffset CreatedAt { get; set; }
+}
+```
+
+```csharp
+[SugarTable("cc_operation_log")]
+public class CcOperationLog
+{
+    [SugarColumn(ColumnName = "id", IsPrimaryKey = true, IsIdentity = true)]
+    public long Id { get; set; }
+
+    [SugarColumn(ColumnName = "namespace_id", IsNullable = true)]
+    public long? NamespaceId { get; set; }
+
+    [SugarColumn(ColumnName = "env_id", IsNullable = true)]
+    public long? EnvId { get; set; }
+
+    [SugarColumn(ColumnName = "group_id", IsNullable = true)]
+    public long? GroupId { get; set; }
+
+    [SugarColumn(ColumnName = "config_id", IsNullable = true)]
+    public long? ConfigId { get; set; }
+
+    [SugarColumn(ColumnName = "operation", Length = 32)]
+    public string Operation { get; set; } = string.Empty; // CREATE/UPDATE/PUBLISH/ROLLBACK/OFFLINE/DELETE
+
+    // JSONB 列：属性为 string 时仅指定 ColumnDataType；
+    // 若改为强类型对象/Dictionary，则加 IsJson = true 由 SqlSugar 自动序列化。
+    [SugarColumn(ColumnName = "detail", ColumnDataType = "jsonb", IsNullable = true)]
+    public string? Detail { get; set; }
+
+    [SugarColumn(ColumnName = "operator", Length = 64, IsNullable = true)]
+    public string? Operator { get; set; }
+
+    [SugarColumn(ColumnName = "client_ip", Length = 64, IsNullable = true)]
+    public string? ClientIp { get; set; }
+
+    [SugarColumn(ColumnName = "created_at", ColumnDataType = "timestamptz")]
+    public DateTimeOffset CreatedAt { get; set; }
+}
+```
+
+### 6.4 PostgreSQL 连接配置示例
+
+```csharp
+// Program.cs 中注册（NuGet：SqlSugarCore）
+builder.Services.AddSingleton<ISqlSugarClient>(sp =>
+{
+    var db = new SqlSugarScope(new ConnectionConfig
+    {
+        DbType = DbType.PostgreSQL,
+        ConnectionString = builder.Configuration.GetConnectionString("ConfigCenter"),
+        IsAutoCloseConnection = true,
+        InitKeyType = InitKeyType.Attribute   // 按实体特性解析主键/自增
+    });
+    return db;
+});
+```
+
+`appsettings.json` 连接字符串样例（占位符，勿提交真实密码）：
+
+```json
+{
+  "ConnectionStrings": {
+    "ConfigCenter": "Host=<HOST>;Port=5432;Database=k_config_center;Username=<USER>;Password=<PASSWORD>;SSL Mode=Prefer"
+  }
+}
+```
+
+### 6.5 落地方式建议：SQL 脚本 vs CodeFirst
+
+| 方式 | 做法 | 评价 |
+|------|------|------|
+| **手工执行 SQL（推荐）** | psql 执行 `config_center_schema.sql`，实体只做映射（DbFirst 思路） | 部分唯一索引（`WHERE deleted_at IS NULL`）、延迟外键、CHECK 约束、COMMENT 等 PostgreSQL 特性完整可控；DDL 进入版本管理，可审查、可回放 |
+| CodeFirst | `db.CodeFirst.InitTables(typeof(CcConfig), ...)` | 适合快速原型；但 SqlSugar CodeFirst 无法表达部分唯一索引、CHECK 约束、循环外键延迟建立等本设计的关键约束，生成结果与设计脚本会有偏差 |
+
+**结论：直接执行本 SQL 脚本建库，禁用 CodeFirst 建表；实体类仅承担 ORM 映射职责。**
+
+## 7. 设计取舍说明
+
+1. **为何在 cc_config 冗余 namespace_id / env_id**
+   客户端拉取配置是最高频路径（按 namespace+env 批量拉取、长轮询探测），若每次都 `config → group → env → namespace` 三级 JOIN，成本高且索引利用差。冗余两列后单表命中 `idx_config_ns_env(namespace_id, env_id, status)` 即可完成过滤。代价是配置组不允许跨环境迁移（或迁移时需同步冗余列），该操作极低频，可接受。
+
+2. **为何用 VARCHAR + CHECK 而非 PostgreSQL ENUM**
+   ENUM 增删值需要 `ALTER TYPE`（删除值尤其麻烦，且在事务/复制场景有限制），跨库迁移与 ORM 映射也更繁琐。`VARCHAR(16) + CHECK` 语义等价、约束同样落在数据库层，扩展新状态只需重建 CHECK 约束，SqlSugar 侧直接映射 `string`，简单可靠。
+
+3. **部分唯一索引 + 软删除**
+   若用普通唯一约束 `UNIQUE(group_id, config_key)`，软删除后的旧记录会永久占用 key，导致同名配置无法重建。部分唯一索引 `WHERE deleted_at IS NULL` 只约束"活着"的记录：删除后同 key 可立即重建，而历史（已删）记录仍保留用于审计与版本追溯。
+
+4. **content 用 TEXT 而非 JSONB**
+   配置内容格式多样（text/yaml/properties/xml/toml），并非都是 JSON；JSONB 会拒绝非法 JSON 且不保留键序和原始排版，而配置文件的注释、缩进、顺序对人类可读性很重要。TEXT 原样存储所见即所得，格式校验放在应用层按 `format` 字段执行；配置中心不需要对 content 做 JSON 路径查询，JSONB 的索引优势用不上（审计的 `detail` 才需要，故日志表用 JSONB）。
+
+## 8. 可选扩展（仅规划，不在本期 DDL 中）
+
+- **灰度发布表（cc_gray_release）**：记录配置的灰度版本与灰度规则（按 IP 列表 / 客户端标签 / 百分比），客户端拉取时先匹配灰度规则命中灰度版本，否则回落正式 `published_version_id`；全量发布时将灰度版本转正并关闭灰度记录。
+- **监听推送记录表（cc_listener / cc_push_record）**：登记各客户端实例正在监听的 namespace+env+group 及其本地 md5，用于观测配置下发覆盖率；推送记录表记录每次变更推送到各实例的结果与耗时，便于排查"配置没生效"类问题。
+- **权限表（cc_user / cc_role / cc_permission）**：按 namespace（或细到 env/group）粒度授权，区分读、写、发布、回滚权限；发布/回滚等高危操作可叠加审批流。操作日志表已有 `operator` 字段，可与用户体系打通形成完整审计链。
