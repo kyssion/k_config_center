@@ -4,3 +4,9 @@ obj/
 riderModule.iml
 /_ReSharper.Caches/
 .idea
+
+# 本地开发配置（含真实数据库凭据），禁止提交
+appsettings.Development.json
+
+# 前端构建产物输出目录，不入库
+k_config_center/wwwroot/

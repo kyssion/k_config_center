@@ -1,6 +1,0 @@
-@k_config_center_HostAddress = http://localhost:5096
-
-GET {{k_config_center_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###

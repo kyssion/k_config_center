@@ -7,6 +7,10 @@
 -- 执行方式：psql -U <user> -d <database> -f 配置中心建表脚本.sql
 -- 幂等说明：如需重复执行，请取消下方 DROP TABLE 注释块（会级联删除数据，慎用！）；
 --           或自行改造为 CREATE TABLE IF NOT EXISTS。
+-- 连接信息：账户 / 密码 / 地址请使用各自环境的真实值，不要把凭据写进本脚本或提交到仓库
+-- 账户：<your_db_user>
+-- 密码：<your_db_password>
+-- 数据库url : <your_db_host>:5432/k_config_center
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -29,12 +33,15 @@ CREATE TABLE config_center_namespace (
     namespace_name VARCHAR(128) NOT NULL,
     description    VARCHAR(512),
     status         SMALLINT     NOT NULL DEFAULT 1,
+    deleted_at     TIMESTAMPTZ,
     created_by     VARCHAR(64),
     updated_by     VARCHAR(64),
     created_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    updated_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    CONSTRAINT unique_namespace_key UNIQUE (namespace_key)
+    updated_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
+
+-- 部分唯一索引：仅约束未软删除的记录，namespace_key 全局唯一（软删除后同 key 可复用）
+CREATE UNIQUE INDEX unique_namespace_key ON config_center_namespace (namespace_key) WHERE deleted_at IS NULL;
 
 COMMENT ON TABLE  config_center_namespace                IS '命名空间表：配置中心顶层隔离单元';
 COMMENT ON COLUMN config_center_namespace.id             IS '自增主键';
@@ -42,6 +49,7 @@ COMMENT ON COLUMN config_center_namespace.namespace_key  IS '命名空间业务�
 COMMENT ON COLUMN config_center_namespace.namespace_name IS '命名空间显示名称';
 COMMENT ON COLUMN config_center_namespace.description    IS '描述';
 COMMENT ON COLUMN config_center_namespace.status         IS '状态：1=启用，0=禁用';
+COMMENT ON COLUMN config_center_namespace.deleted_at     IS '软删除标记，NULL 表示未删除';
 COMMENT ON COLUMN config_center_namespace.created_by     IS '创建人';
 COMMENT ON COLUMN config_center_namespace.updated_by     IS '最后修改人';
 COMMENT ON COLUMN config_center_namespace.created_at     IS '创建时间（含时区）';
@@ -59,11 +67,14 @@ CREATE TABLE config_center_environment (
     description      VARCHAR(512),
     sort_order       INT          NOT NULL DEFAULT 0,
     status           SMALLINT     NOT NULL DEFAULT 1,
+    deleted_at       TIMESTAMPTZ,
     created_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    CONSTRAINT foreign_key_environment_namespace FOREIGN KEY (namespace_id) REFERENCES config_center_namespace (id),
-    CONSTRAINT unique_environment_namespace_key UNIQUE (namespace_id, environment_key)
+    CONSTRAINT foreign_key_environment_namespace FOREIGN KEY (namespace_id) REFERENCES config_center_namespace (id)
 );
+
+-- 部分唯一索引：仅约束未软删除的记录，命名空间内 environment_key 唯一（软删除后同 key 可复用）
+CREATE UNIQUE INDEX unique_environment_namespace_key ON config_center_environment (namespace_id, environment_key) WHERE deleted_at IS NULL;
 
 COMMENT ON TABLE  config_center_environment                  IS '环境表：命名空间下的环境（dev/test/staging/prod）';
 COMMENT ON COLUMN config_center_environment.id               IS '自增主键';
@@ -73,6 +84,7 @@ COMMENT ON COLUMN config_center_environment.environment_name IS '环境显示名
 COMMENT ON COLUMN config_center_environment.description      IS '描述';
 COMMENT ON COLUMN config_center_environment.sort_order       IS '排序值，越小越靠前';
 COMMENT ON COLUMN config_center_environment.status           IS '状态：1=启用，0=禁用';
+COMMENT ON COLUMN config_center_environment.deleted_at       IS '软删除标记，NULL 表示未删除';
 COMMENT ON COLUMN config_center_environment.created_at       IS '创建时间（含时区）';
 COMMENT ON COLUMN config_center_environment.updated_at       IS '更新时间（含时区）';
 
@@ -88,14 +100,17 @@ CREATE TABLE config_center_configuration_group (
     group_name     VARCHAR(128) NOT NULL,
     description    VARCHAR(512),
     status         SMALLINT     NOT NULL DEFAULT 1,
+    deleted_at     TIMESTAMPTZ,
     created_by     VARCHAR(64),
     updated_by     VARCHAR(64),
     created_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
     CONSTRAINT foreign_key_group_namespace FOREIGN KEY (namespace_id) REFERENCES config_center_namespace (id),
-    CONSTRAINT foreign_key_group_environment FOREIGN KEY (environment_id) REFERENCES config_center_environment (id),
-    CONSTRAINT unique_group_environment_key UNIQUE (environment_id, group_key)
+    CONSTRAINT foreign_key_group_environment FOREIGN KEY (environment_id) REFERENCES config_center_environment (id)
 );
+
+-- 部分唯一索引：仅约束未软删除的记录，环境内 group_key 唯一（软删除后同 key 可复用）
+CREATE UNIQUE INDEX unique_group_environment_key ON config_center_configuration_group (environment_id, group_key) WHERE deleted_at IS NULL;
 
 CREATE INDEX index_group_namespace_environment ON config_center_configuration_group (namespace_id, environment_id);
 
@@ -107,6 +122,7 @@ COMMENT ON COLUMN config_center_configuration_group.group_key      IS '配置组
 COMMENT ON COLUMN config_center_configuration_group.group_name     IS '配置组显示名称';
 COMMENT ON COLUMN config_center_configuration_group.description    IS '描述';
 COMMENT ON COLUMN config_center_configuration_group.status         IS '状态：1=启用，0=禁用';
+COMMENT ON COLUMN config_center_configuration_group.deleted_at     IS '软删除标记，NULL 表示未删除';
 COMMENT ON COLUMN config_center_configuration_group.created_by     IS '创建人';
 COMMENT ON COLUMN config_center_configuration_group.updated_by     IS '最后修改人';
 COMMENT ON COLUMN config_center_configuration_group.created_at     IS '创建时间（含时区）';
@@ -171,6 +187,7 @@ COMMENT ON COLUMN config_center_configuration.updated_at            IS '更新�
 -- ============================================================================
 -- 5. config_center_configuration_version 配置版本表（历史快照，不可变）
 --    每次发布/回滚/删除等操作写入一条不可变快照，版本号线性递增。
+--    版本记录本身不可删除（不提供删除能力，故不设 deleted_at 列）。
 -- ============================================================================
 CREATE TABLE config_center_configuration_version (
     id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -210,6 +227,7 @@ ALTER TABLE config_center_configuration
 -- ============================================================================
 -- 6. config_center_operation_log 操作日志表
 --    审计用途，仅记录 ID 不加外键约束，避免影响主表删除与写入性能。
+--    审计记录本身不可删除（不提供删除能力，故不设 deleted_at 列）。
 -- ============================================================================
 CREATE TABLE config_center_operation_log (
     id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -237,6 +255,45 @@ COMMENT ON COLUMN config_center_operation_log.detail            IS '操作详情
 COMMENT ON COLUMN config_center_operation_log.operator          IS '操作人';
 COMMENT ON COLUMN config_center_operation_log.client_ip_address IS '操作来源 IP';
 COMMENT ON COLUMN config_center_operation_log.created_at        IS '操作时间（含时区）';
+
+-- ============================================================================
+-- 7. updated_at 自动更新触发器
+--    PostgreSQL 不支持 MySQL 的 ON UPDATE CURRENT_TIMESTAMP，
+--    通过通用触发器函数在每次 UPDATE 前自动刷新 updated_at 列。
+-- ============================================================================
+
+-- 通用触发器函数：任意行更新前将 updated_at 置为当前时间
+CREATE OR REPLACE FUNCTION function_automatic_update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at := now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION function_automatic_update_updated_at() IS '通用触发器函数：行更新前自动将 updated_at 刷新为当前时间';
+
+-- 为所有含 updated_at 列的表逐一创建 BEFORE UPDATE 触发器
+-- （config_center_configuration_version 与 config_center_operation_log 仅有 created_at，无需触发器）
+CREATE TRIGGER trigger_config_center_namespace_update_updated_at
+    BEFORE UPDATE ON config_center_namespace
+    FOR EACH ROW
+    EXECUTE FUNCTION function_automatic_update_updated_at();
+
+CREATE TRIGGER trigger_config_center_environment_update_updated_at
+    BEFORE UPDATE ON config_center_environment
+    FOR EACH ROW
+    EXECUTE FUNCTION function_automatic_update_updated_at();
+
+CREATE TRIGGER trigger_config_center_configuration_group_update_updated_at
+    BEFORE UPDATE ON config_center_configuration_group
+    FOR EACH ROW
+    EXECUTE FUNCTION function_automatic_update_updated_at();
+
+CREATE TRIGGER trigger_config_center_configuration_update_updated_at
+    BEFORE UPDATE ON config_center_configuration
+    FOR EACH ROW
+    EXECUTE FUNCTION function_automatic_update_updated_at();
 
 -- ============================================================================
 -- 初始化数据：默认 public 命名空间
