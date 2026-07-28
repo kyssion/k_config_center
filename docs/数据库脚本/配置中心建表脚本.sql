@@ -4,7 +4,7 @@
 -- 用途    ：初始化配置中心数据库表结构（namespace → environment → group → configuration，
 --           含版本快照与操作日志）。
 -- 数据库  ：PostgreSQL 14+
--- 执行方式：psql -U <user> -d <database> -f config_center_schema.sql
+-- 执行方式：psql -U <user> -d <database> -f 配置中心建表脚本.sql
 -- 幂等说明：如需重复执行，请取消下方 DROP TABLE 注释块（会级联删除数据，慎用！）；
 --           或自行改造为 CREATE TABLE IF NOT EXISTS。
 -- ============================================================================
