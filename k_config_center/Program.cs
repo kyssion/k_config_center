@@ -1,6 +1,7 @@
 using k_config_center.Infrastructure;
 using k_config_center.Repositories;
 using k_config_center.Services;
+using Microsoft.OpenApi;
 
 namespace k_config_center;
 
@@ -32,15 +33,39 @@ public class Program
         builder.Services.AddScoped<ClientConfigurationService>();
         builder.Services.AddScoped<OperationLogService>();
 
-        // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-        builder.Services.AddOpenApi();
+        // Swagger（Swashbuckle）：接口文档由各 Controller / Models 的 XML 注释生成，仅 Development 环境启用 UI
+        builder.Services.AddSwaggerGen(options =>
+        {
+            options.SwaggerDoc("v1", new OpenApiInfo
+            {
+                Title = "配置中心 API",
+                Version = "v1",
+                Description = """
+                    配置中心后端接口（管理端 + 客户端读取）。
+
+                    统一响应结构：{ code, message, data }，业务失败时 HTTP 仍返 200，错误由 code 表达（data 为 null）。
+
+                    错误码分段（后端方案 7.1）：
+                    - 0：成功
+                    - 10000+：通用（10000 服务器内部错误、10001 参数校验失败、10002 资源不存在）
+                    - 20000+：基础维度（20001/20002/20003 三级 key 冲突、20004 存在未删除下级资源拒绝删除）
+                    - 30000+：配置与发布（30001 配置 key 冲突、30002 无未发布变更、30003 回滚版本不存在、30004 发布并发冲突）
+                    """
+            });
+            // 读取编译生成的 XML 注释文件（csproj 已开 GenerateDocumentationFile）
+            options.IncludeXmlComments(Path.Combine(AppContext.BaseDirectory, "k_config_center.xml"), includeControllerXmlComments: true);
+            // 为所有写操作补充 X-Operator 请求头说明
+            options.OperationFilter<SwaggerOperatorHeaderFilter>();
+        });
 
         var app = builder.Build();
 
         // Configure the HTTP request pipeline.
         if (app.Environment.IsDevelopment())
         {
-            app.MapOpenApi();
+            // Swagger UI 仅开发环境暴露（生产不开），默认路径 /swagger
+            app.UseSwagger();
+            app.UseSwaggerUI();
         }
 
         // 全局异常处理：BusinessException 统一转 { code, message, data: null }（HTTP 200，错误由 code 表达，后端方案 7.1）；

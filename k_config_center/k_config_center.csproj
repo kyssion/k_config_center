@@ -4,12 +4,15 @@
         <TargetFramework>net10.0</TargetFramework>
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
+        <!-- 生成 XML 注释文件供 Swagger 展示接口文档；1591（成员缺注释告警）压掉，保持 0 警告构建 -->
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <NoWarn>$(NoWarn);1591</NoWarn>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
         <PackageReference Include="Npgsql" Version="10.0.3" />
         <PackageReference Include="SqlSugarCore" Version="5.1.4.216" />
+        <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
     </ItemGroup>
 
 </Project>

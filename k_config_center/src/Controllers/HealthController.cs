@@ -10,8 +10,9 @@ namespace k_config_center.Controllers;
 [Route("api/health")]
 public class HealthController(NamespaceRepository namespaceRepository, ILogger<HealthController> logger) : ControllerBase
 {
-    /// <summary>数据库连通性检查：对 config_center_namespace 做一次轻量 Count 查询；
-    /// 返回统一响应结构 { code, message, data }，失败时异常详情只记日志不透给客户端</summary>
+    /// <summary>数据库连通性检查</summary>
+    /// <remarks>对 config_center_namespace 做一次轻量 Count 查询；失败时异常详情只记服务端日志，返回 10000</remarks>
+    /// <returns>data 为 { canConnect, namespaceCount }</returns>
     [HttpGet("database")]
     public async Task<IActionResult> CheckDatabase()
     {
