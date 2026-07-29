@@ -12,6 +12,8 @@
     <ItemGroup>
         <PackageReference Include="Npgsql" Version="10.0.3" />
         <PackageReference Include="SqlSugarCore" Version="5.1.4.216" />
+        <!-- 仅用于顶替 SqlSugarCore 传递引用的漏洞版本 2.1.11（NU1903 / CVE-2025-6965），项目并不使用 SQLite -->
+        <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
         <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
     </ItemGroup>
 

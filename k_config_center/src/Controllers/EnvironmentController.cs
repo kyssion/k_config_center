@@ -12,10 +12,10 @@ public class EnvironmentController(EnvironmentService environmentService) : Cont
 {
     /// <summary>命名空间下环境列表</summary>
     /// <remarks>按 sort_order 升序排列，已软删除的记录不返回</remarks>
-    /// <param name="namespaceId">所属命名空间 id（必填）</param>
+    /// <param name="namespaceId">所属命名空间 id（可选，不传返回全部环境）</param>
     /// <returns>data 为 EnvironmentResponse 数组</returns>
     [HttpGet]
-    public async Task<object> List(long namespaceId) =>
+    public async Task<object> List(long? namespaceId) =>
         ApiResponse.Ok(await environmentService.ListAsync(namespaceId));
 
     /// <summary>创建环境</summary>

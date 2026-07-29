@@ -93,7 +93,16 @@ public class Program
 
         app.UseHttpsRedirection();
 
+        // 托管 wwwroot 下的前端构建产物
+        app.UseStaticFiles();
+
         app.MapControllers();
+
+        // /api 前缀不参与 SPA 兜底：未知 API 路径返回 404，避免 SDK/客户端把 index.html 当成功响应解析
+        app.MapFallback("/api/{*path}", () => Results.NotFound());
+
+        // 前端 SPA 路由兜底，直接访问前端路由时回落 index.html 由 react-router 接管
+        app.MapFallbackToFile("index.html");
 
         app.Run();
     }

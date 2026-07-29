@@ -20,11 +20,11 @@ public class ConfigurationService(
     /// <summary>当前请求对象：供操作人与客户端 IP 提取</summary>
     private HttpRequest Request => httpContextAccessor.HttpContext!.Request;
 
-    /// <summary>配置项列表（按组，可选状态/关键字过滤）：附「有未发布变更」标记，前端不做 md5 对比。
+    /// <summary>配置项列表（组/命名空间/环境/状态/关键字过滤均可选）：附「有未发布变更」标记，前端不做 md5 对比。
     /// 一次性取出全部生效版本的 md5 做内存比对，避免逐条回查数据库</summary>
-    public async Task<List<ConfigurationResponse>> ListAsync(long groupId, string? status, string? keyword)
+    public async Task<List<ConfigurationResponse>> ListAsync(long? groupId, long? namespaceId, long? environmentId, string? status, string? keyword)
     {
-        var configurations = await configurationRepository.ListByGroupAsync(groupId, status, keyword);
+        var configurations = await configurationRepository.ListAsync(groupId, namespaceId, environmentId, status, keyword);
         var publishedVersionIds = configurations.Where(it => it.PublishedVersionId != null).Select(it => it.PublishedVersionId!.Value).ToList();
         var publishedMd5ById = await configurationVersionRepository.GetMd5ByIdsAsync(publishedVersionIds);
         return configurations.Select(it => ConfigurationResponse.From(it,

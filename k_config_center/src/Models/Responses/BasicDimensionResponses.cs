@@ -30,12 +30,15 @@ public record NamespaceResponse(long Id, string NamespaceKey, string NamespaceNa
 /// <param name="Status">状态：1=启用，0=禁用</param>
 /// <param name="CreatedAt">创建时间（UTC）</param>
 /// <param name="UpdatedAt">最后更新时间（UTC）</param>
+/// <param name="NamespaceKey">所属命名空间业务 key（联表冗余，关联不到为 null）</param>
+/// <param name="NamespaceName">所属命名空间显示名称（联表冗余，关联不到为 null）</param>
 public record EnvironmentResponse(long Id, long NamespaceId, string EnvironmentKey, string EnvironmentName, string? Description,
-    int SortOrder, short Status, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt)
+    int SortOrder, short Status, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt,
+    string? NamespaceKey = null, string? NamespaceName = null)
 {
     public static EnvironmentResponse From(EnvironmentData data) =>
         new(data.Id, data.NamespaceId, data.EnvironmentKey, data.EnvironmentName, data.Description,
-            data.SortOrder, data.Status, data.CreatedAt, data.UpdatedAt);
+            data.SortOrder, data.Status, data.CreatedAt, data.UpdatedAt, data.NamespaceKey, data.NamespaceName);
 }
 
 /// <summary>配置组响应模型</summary>
@@ -50,10 +53,16 @@ public record EnvironmentResponse(long Id, long NamespaceId, string EnvironmentK
 /// <param name="UpdatedBy">最后更新人，可空</param>
 /// <param name="CreatedAt">创建时间（UTC）</param>
 /// <param name="UpdatedAt">最后更新时间（UTC）</param>
+/// <param name="NamespaceKey">所属命名空间业务 key（联表冗余，关联不到为 null）</param>
+/// <param name="NamespaceName">所属命名空间显示名称（联表冗余，关联不到为 null）</param>
+/// <param name="EnvironmentKey">所属环境业务 key（联表冗余，关联不到为 null）</param>
+/// <param name="EnvironmentName">所属环境显示名称（联表冗余，关联不到为 null）</param>
 public record ConfigurationGroupResponse(long Id, long NamespaceId, long EnvironmentId, string GroupKey, string GroupName,
-    string? Description, short Status, string? CreatedBy, string? UpdatedBy, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt)
+    string? Description, short Status, string? CreatedBy, string? UpdatedBy, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt,
+    string? NamespaceKey = null, string? NamespaceName = null, string? EnvironmentKey = null, string? EnvironmentName = null)
 {
     public static ConfigurationGroupResponse From(ConfigurationGroupData data) =>
         new(data.Id, data.NamespaceId, data.EnvironmentId, data.GroupKey, data.GroupName,
-            data.Description, data.Status, data.CreatedBy, data.UpdatedBy, data.CreatedAt, data.UpdatedAt);
+            data.Description, data.Status, data.CreatedBy, data.UpdatedBy, data.CreatedAt, data.UpdatedAt,
+            data.NamespaceKey, data.NamespaceName, data.EnvironmentKey, data.EnvironmentName);
 }

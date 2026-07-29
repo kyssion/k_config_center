@@ -24,13 +24,20 @@ public class OperationLogRepository(ISqlSugarClient database)
                 clientIpAddress
             });
 
-    /// <summary>日志分页检索：各过滤条件均可选，时间区间为闭开区间 [startTime, endTime)，按时间倒序</summary>
+    /// <summary>日志分页检索：各过滤条件均可选，时间区间为闭开区间 [startTime, endTime)，按时间倒序。
+    /// LeftJoin 命名空间/环境/配置组/配置项表带出冗余 key/名称供展示；
+    /// ClearFilter 绕过全局软删过滤器（审计需回溯已删除资源，见 SqlSugarSetup 约定），关联不到为 null</summary>
     public async Task<(List<OperationLogData> Items, int Total)> ListPageAsync(
         long? namespaceId, long? environmentId, long? groupId, long? configurationId,
         string? operation, DateTimeOffset? startTime, DateTimeOffset? endTime, int pageIndex, int pageSize)
     {
         RefAsync<int> total = 0;
-        var entities = await database.Queryable<ConfigCenterOperationLog>()
+        var rows = await database.Queryable<ConfigCenterOperationLog>()
+            .ClearFilter()
+            .LeftJoin<ConfigCenterNamespace>((it, ns) => it.NamespaceId == ns.Id)
+            .LeftJoin<ConfigCenterEnvironment>((it, ns, env) => it.EnvironmentId == env.Id)
+            .LeftJoin<ConfigCenterConfigurationGroup>((it, ns, env, grp) => it.GroupId == grp.Id)
+            .LeftJoin<ConfigCenterConfiguration>((it, ns, env, grp, cfg) => it.ConfigurationId == cfg.Id)
             .WhereIF(namespaceId != null, it => it.NamespaceId == namespaceId)
             .WhereIF(environmentId != null, it => it.EnvironmentId == environmentId)
             .WhereIF(groupId != null, it => it.GroupId == groupId)
@@ -39,8 +46,22 @@ public class OperationLogRepository(ISqlSugarClient database)
             .WhereIF(startTime != null, it => it.CreatedAt >= startTime)
             .WhereIF(endTime != null, it => it.CreatedAt < endTime)
             .OrderByDescending(it => it.CreatedAt)
+            .Select((it, ns, env, grp, cfg) => new
+            {
+                Entity = it,
+                ns.NamespaceKey, ns.NamespaceName,
+                env.EnvironmentKey, env.EnvironmentName,
+                grp.GroupKey, grp.GroupName,
+                cfg.ConfigurationKey
+            })
             .ToPageListAsync(pageIndex, pageSize, total);
-        return (entities.Select(From).ToList(), total);
+        return (rows.Select(row => From(row.Entity) with
+        {
+            NamespaceKey = row.NamespaceKey, NamespaceName = row.NamespaceName,
+            EnvironmentKey = row.EnvironmentKey, EnvironmentName = row.EnvironmentName,
+            GroupKey = row.GroupKey, GroupName = row.GroupName,
+            ConfigurationKey = row.ConfigurationKey
+        }).ToList(), total);
     }
 
     /// <summary>实体 → 业务数据（实体不出本层）</summary>

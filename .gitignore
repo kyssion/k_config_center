@@ -10,3 +10,6 @@ appsettings.Development.json
 
 # 前端构建产物输出目录，不入库
 k_config_center/wwwroot/
+
+# 前端依赖目录，不入库
+node_modules/

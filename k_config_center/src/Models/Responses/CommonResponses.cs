@@ -31,10 +31,21 @@ public record ClientNotificationResponse(bool Changed, string Md5);
 /// <param name="Operator">操作人，缺省 system</param>
 /// <param name="ClientIpAddress">操作来源 IP，可空</param>
 /// <param name="CreatedAt">操作时间（UTC）</param>
+/// <param name="NamespaceKey">关联命名空间业务 key（联表冗余，含已软删记录，关联不到为 null）</param>
+/// <param name="NamespaceName">关联命名空间显示名称（联表冗余，关联不到为 null）</param>
+/// <param name="EnvironmentKey">关联环境业务 key（联表冗余，关联不到为 null）</param>
+/// <param name="EnvironmentName">关联环境显示名称（联表冗余，关联不到为 null）</param>
+/// <param name="GroupKey">关联配置组业务 key（联表冗余，关联不到为 null）</param>
+/// <param name="GroupName">关联配置组显示名称（联表冗余，关联不到为 null）</param>
+/// <param name="ConfigurationKey">关联配置项 key（联表冗余，配置项无显示名称，关联不到为 null）</param>
 public record OperationLogResponse(long Id, long? NamespaceId, long? EnvironmentId, long? GroupId, long? ConfigurationId,
-    string Operation, string? Detail, string? Operator, string? ClientIpAddress, DateTimeOffset CreatedAt)
+    string Operation, string? Detail, string? Operator, string? ClientIpAddress, DateTimeOffset CreatedAt,
+    string? NamespaceKey = null, string? NamespaceName = null, string? EnvironmentKey = null, string? EnvironmentName = null,
+    string? GroupKey = null, string? GroupName = null, string? ConfigurationKey = null)
 {
     public static OperationLogResponse From(OperationLogData data) =>
         new(data.Id, data.NamespaceId, data.EnvironmentId, data.GroupId, data.ConfigurationId,
-            data.Operation, data.Detail, data.Operator, data.ClientIpAddress, data.CreatedAt);
+            data.Operation, data.Detail, data.Operator, data.ClientIpAddress, data.CreatedAt,
+            data.NamespaceKey, data.NamespaceName, data.EnvironmentKey, data.EnvironmentName,
+            data.GroupKey, data.GroupName, data.ConfigurationKey);
 }

@@ -22,16 +22,26 @@ namespace k_config_center.Models.Responses;
 /// <param name="CreatedAt">创建时间（UTC）</param>
 /// <param name="UpdatedAt">最后更新时间（UTC）</param>
 /// <param name="HasUnpublishedChange">当前内容与生效版本快照是否存在差异（含从未发布）</param>
+/// <param name="NamespaceName">所属命名空间显示名称（联表冗余，关联不到为 null）</param>
+/// <param name="EnvironmentName">所属环境显示名称（联表冗余，关联不到为 null）</param>
+/// <param name="GroupName">所属配置组显示名称（联表冗余，关联不到为 null）</param>
+/// <param name="NamespaceKey">所属命名空间业务 key（联表冗余，关联不到为 null）</param>
+/// <param name="EnvironmentKey">所属环境业务 key（联表冗余，关联不到为 null）</param>
+/// <param name="GroupKey">所属配置组业务 key（联表冗余，关联不到为 null）</param>
 public record ConfigurationResponse(long Id, long GroupId, long NamespaceId, long EnvironmentId, string ConfigurationKey,
     string? Content, string Format, string? Md5, string? Description, string? Tags, string Status,
     long? PublishedVersionId, long LatestVersionNumber, DateTimeOffset? PublishedAt,
-    string? CreatedBy, string? UpdatedBy, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, bool HasUnpublishedChange)
+    string? CreatedBy, string? UpdatedBy, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, bool HasUnpublishedChange,
+    string? NamespaceName = null, string? EnvironmentName = null, string? GroupName = null,
+    string? NamespaceKey = null, string? EnvironmentKey = null, string? GroupKey = null)
 {
     public static ConfigurationResponse From(ConfigurationData data, bool hasUnpublishedChange) =>
         new(data.Id, data.GroupId, data.NamespaceId, data.EnvironmentId, data.ConfigurationKey,
             data.Content, data.Format, data.Md5, data.Description, data.Tags, data.Status,
             data.PublishedVersionId, data.LatestVersionNumber, data.PublishedAt,
-            data.CreatedBy, data.UpdatedBy, data.CreatedAt, data.UpdatedAt, hasUnpublishedChange);
+            data.CreatedBy, data.UpdatedBy, data.CreatedAt, data.UpdatedAt, hasUnpublishedChange,
+            data.NamespaceName, data.EnvironmentName, data.GroupName,
+            data.NamespaceKey, data.EnvironmentKey, data.GroupKey);
 }
 
 /// <summary>配置详情响应：当前编辑态 + 生效版本信息（未发布过则为 null）</summary>

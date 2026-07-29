@@ -13,13 +13,15 @@ public class ConfigurationController(ConfigurationService configurationService, 
 {
     /// <summary>配置项列表</summary>
     /// <remarks>返回当前编辑态，附「有未发布变更」hasUnpublishedChange 标记（服务端算好，前端不做 md5 对比）；已软删除的记录不返回</remarks>
-    /// <param name="groupId">所属配置组 id（必填）</param>
+    /// <param name="groupId">所属配置组 id（可选）</param>
+    /// <param name="namespaceId">所属命名空间 id（可选）</param>
+    /// <param name="environmentId">所属环境 id（可选）</param>
     /// <param name="status">按状态过滤（可选）：DRAFT / PUBLISHED / OFFLINE</param>
     /// <param name="keyword">按 key 模糊匹配（可选）</param>
-    /// <returns>data 为 ConfigurationResponse 数组</returns>
+    /// <returns>data 为 ConfigurationResponse 数组；各过滤参数可任意组合，全不传返回全量</returns>
     [HttpGet]
-    public async Task<object> List(long groupId, string? status, string? keyword) =>
-        ApiResponse.Ok(await configurationService.ListAsync(groupId, status, keyword));
+    public async Task<object> List(long? groupId, long? namespaceId, long? environmentId, string? status, string? keyword) =>
+        ApiResponse.Ok(await configurationService.ListAsync(groupId, namespaceId, environmentId, status, keyword));
 
     /// <summary>配置详情</summary>
     /// <remarks>返回当前编辑态 + 生效版本快照（从未发布过则 publishedVersion 为 null）；不存在或已软删除返回 10002</remarks>

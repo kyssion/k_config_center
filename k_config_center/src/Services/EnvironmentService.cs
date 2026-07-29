@@ -17,8 +17,8 @@ public class EnvironmentService(
     /// <summary>当前请求对象：供操作人与客户端 IP 提取</summary>
     private HttpRequest Request => httpContextAccessor.HttpContext!.Request;
 
-    /// <summary>命名空间下环境列表：按 sort_order 再按创建时间排序（后端方案 7.2）</summary>
-    public async Task<List<EnvironmentResponse>> ListAsync(long namespaceId) =>
+    /// <summary>环境列表：命名空间过滤可选，按 sort_order 再按创建时间排序（后端方案 7.2）</summary>
+    public async Task<List<EnvironmentResponse>> ListAsync(long? namespaceId) =>
         (await environmentRepository.ListByNamespaceAsync(namespaceId)).Select(EnvironmentResponse.From).ToList();
 
     /// <summary>创建环境：同命名空间内 environment_key 唯一冲突转业务错误码 20002</summary>

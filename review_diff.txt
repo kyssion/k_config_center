@@ -1,0 +1,1367 @@
+diff --git a/k_config_center/src/Controllers/ConfigurationController.cs b/k_config_center/src/Controllers/ConfigurationController.cs
+index 840cc94..ceeeecd 100644
+--- a/k_config_center/src/Controllers/ConfigurationController.cs
++++ b/k_config_center/src/Controllers/ConfigurationController.cs
+@@ -13,13 +13,15 @@ public class ConfigurationController(ConfigurationService configurationService,
+ {
+     /// <summary>配置项列表</summary>
+     /// <remarks>返回当前编辑态，附「有未发布变更」hasUnpublishedChange 标记（服务端算好，前端不做 md5 对比）；已软删除的记录不返回</remarks>
+-    /// <param name="groupId">所属配置组 id（必填）</param>
++    /// <param name="groupId">所属配置组 id（可选）</param>
++    /// <param name="namespaceId">所属命名空间 id（可选）</param>
++    /// <param name="environmentId">所属环境 id（可选）</param>
+     /// <param name="status">按状态过滤（可选）：DRAFT / PUBLISHED / OFFLINE</param>
+     /// <param name="keyword">按 key 模糊匹配（可选）</param>
+-    /// <returns>data 为 ConfigurationResponse 数组</returns>
++    /// <returns>data 为 ConfigurationResponse 数组；各过滤参数可任意组合，全不传返回全量</returns>
+     [HttpGet]
+-    public async Task<object> List(long groupId, string? status, string? keyword) =>
+-        ApiResponse.Ok(await configurationService.ListAsync(groupId, status, keyword));
++    public async Task<object> List(long? groupId, long? namespaceId, long? environmentId, string? status, string? keyword) =>
++        ApiResponse.Ok(await configurationService.ListAsync(groupId, namespaceId, environmentId, status, keyword));
+ 
+     /// <summary>配置详情</summary>
+     /// <remarks>返回当前编辑态 + 生效版本快照（从未发布过则 publishedVersion 为 null）；不存在或已软删除返回 10002</remarks>
+diff --git a/k_config_center/src/Controllers/EnvironmentController.cs b/k_config_center/src/Controllers/EnvironmentController.cs
+index 4e10971..54830f0 100644
+--- a/k_config_center/src/Controllers/EnvironmentController.cs
++++ b/k_config_center/src/Controllers/EnvironmentController.cs
+@@ -12,10 +12,10 @@ public class EnvironmentController(EnvironmentService environmentService) : Cont
+ {
+     /// <summary>命名空间下环境列表</summary>
+     /// <remarks>按 sort_order 升序排列，已软删除的记录不返回</remarks>
+-    /// <param name="namespaceId">所属命名空间 id（必填）</param>
++    /// <param name="namespaceId">所属命名空间 id（可选，不传返回全部环境）</param>
+     /// <returns>data 为 EnvironmentResponse 数组</returns>
+     [HttpGet]
+-    public async Task<object> List(long namespaceId) =>
++    public async Task<object> List(long? namespaceId) =>
+         ApiResponse.Ok(await environmentService.ListAsync(namespaceId));
+ 
+     /// <summary>创建环境</summary>
+diff --git a/k_config_center/src/Repositories/ConfigurationRepository.cs b/k_config_center/src/Repositories/ConfigurationRepository.cs
+index fa44d2c..d4a37dc 100644
+--- a/k_config_center/src/Repositories/ConfigurationRepository.cs
++++ b/k_config_center/src/Repositories/ConfigurationRepository.cs
+@@ -8,10 +8,12 @@ namespace k_config_center.Repositories;
+ /// 含发布流程需要的原子操作（版本号自增、生效指针切换），事务边界由 Service 层通过 DatabaseTransactionRunner 编排</summary>
+ public class ConfigurationRepository(ISqlSugarClient database)
+ {
+-    /// <summary>组内配置列表：状态/关键字过滤可选，按创建时间排序</summary>
+-    public async Task<List<ConfigurationData>> ListByGroupAsync(long groupId, string? status, string? keyword) =>
++    /// <summary>配置列表：组/命名空间/环境/状态/关键字过滤均可选（实体含 NamespaceId/EnvironmentId 冗余列，单表过滤无需联表），按创建时间排序</summary>
++    public async Task<List<ConfigurationData>> ListAsync(long? groupId, long? namespaceId, long? environmentId, string? status, string? keyword) =>
+         (await database.Queryable<ConfigCenterConfiguration>()
+-            .Where(it => it.GroupId == groupId)
++            .WhereIF(groupId != null, it => it.GroupId == groupId)
++            .WhereIF(namespaceId != null, it => it.NamespaceId == namespaceId)
++            .WhereIF(environmentId != null, it => it.EnvironmentId == environmentId)
+             .WhereIF(!string.IsNullOrEmpty(status), it => it.Status == status)
+             .WhereIF(!string.IsNullOrEmpty(keyword), it => it.ConfigurationKey.Contains(keyword!))
+             .OrderBy(it => it.CreatedAt).ToListAsync())
+diff --git a/k_config_center/src/Repositories/EnvironmentRepository.cs b/k_config_center/src/Repositories/EnvironmentRepository.cs
+index a17170a..b7dda4b 100644
+--- a/k_config_center/src/Repositories/EnvironmentRepository.cs
++++ b/k_config_center/src/Repositories/EnvironmentRepository.cs
+@@ -7,10 +7,10 @@ namespace k_config_center.Repositories;
+ /// <summary>环境数据访问：本模块所有数据库读写收口于此，对外只出入 EnvironmentData 业务数据</summary>
+ public class EnvironmentRepository(ISqlSugarClient database)
+ {
+-    /// <summary>命名空间下环境列表：先按 sort_order 再按创建时间排序（后端方案 7.2）</summary>
+-    public async Task<List<EnvironmentData>> ListByNamespaceAsync(long namespaceId) =>
++    /// <summary>环境列表：命名空间过滤可选（不传返回全部），先按 sort_order 再按创建时间排序（后端方案 7.2）</summary>
++    public async Task<List<EnvironmentData>> ListByNamespaceAsync(long? namespaceId) =>
+         (await database.Queryable<ConfigCenterEnvironment>()
+-            .Where(it => it.NamespaceId == namespaceId)
++            .WhereIF(namespaceId != null, it => it.NamespaceId == namespaceId)
+             .OrderBy(it => it.SortOrder).OrderBy(it => it.CreatedAt).ToListAsync())
+         .Select(From).ToList();
+ 
+diff --git a/k_config_center/src/Services/ConfigurationService.cs b/k_config_center/src/Services/ConfigurationService.cs
+index 449ff45..5f4c6b0 100644
+--- a/k_config_center/src/Services/ConfigurationService.cs
++++ b/k_config_center/src/Services/ConfigurationService.cs
+@@ -20,11 +20,11 @@ public class ConfigurationService(
+     /// <summary>当前请求对象：供操作人与客户端 IP 提取</summary>
+     private HttpRequest Request => httpContextAccessor.HttpContext!.Request;
+ 
+-    /// <summary>配置项列表（按组，可选状态/关键字过滤）：附「有未发布变更」标记，前端不做 md5 对比。
++    /// <summary>配置项列表（组/命名空间/环境/状态/关键字过滤均可选）：附「有未发布变更」标记，前端不做 md5 对比。
+     /// 一次性取出全部生效版本的 md5 做内存比对，避免逐条回查数据库</summary>
+-    public async Task<List<ConfigurationResponse>> ListAsync(long groupId, string? status, string? keyword)
++    public async Task<List<ConfigurationResponse>> ListAsync(long? groupId, long? namespaceId, long? environmentId, string? status, string? keyword)
+     {
+-        var configurations = await configurationRepository.ListByGroupAsync(groupId, status, keyword);
++        var configurations = await configurationRepository.ListAsync(groupId, namespaceId, environmentId, status, keyword);
+         var publishedVersionIds = configurations.Where(it => it.PublishedVersionId != null).Select(it => it.PublishedVersionId!.Value).ToList();
+         var publishedMd5ById = await configurationVersionRepository.GetMd5ByIdsAsync(publishedVersionIds);
+         return configurations.Select(it => ConfigurationResponse.From(it,
+diff --git a/k_config_center/src/Services/EnvironmentService.cs b/k_config_center/src/Services/EnvironmentService.cs
+index 0bb7e0e..fa98d34 100644
+--- a/k_config_center/src/Services/EnvironmentService.cs
++++ b/k_config_center/src/Services/EnvironmentService.cs
+@@ -17,8 +17,8 @@ public class EnvironmentService(
+     /// <summary>当前请求对象：供操作人与客户端 IP 提取</summary>
+     private HttpRequest Request => httpContextAccessor.HttpContext!.Request;
+ 
+-    /// <summary>命名空间下环境列表：按 sort_order 再按创建时间排序（后端方案 7.2）</summary>
+-    public async Task<List<EnvironmentResponse>> ListAsync(long namespaceId) =>
++    /// <summary>环境列表：命名空间过滤可选，按 sort_order 再按创建时间排序（后端方案 7.2）</summary>
++    public async Task<List<EnvironmentResponse>> ListAsync(long? namespaceId) =>
+         (await environmentRepository.ListByNamespaceAsync(namespaceId)).Select(EnvironmentResponse.From).ToList();
+ 
+     /// <summary>创建环境：同命名空间内 environment_key 唯一冲突转业务错误码 20002</summary>
+diff --git a/web/src/api/configuration.ts b/web/src/api/configuration.ts
+index b533c4c..902fef1 100644
+--- a/web/src/api/configuration.ts
++++ b/web/src/api/configuration.ts
+@@ -15,7 +15,7 @@ import type {
+ /** 配置项接口：对应后端 ConfigurationController（路由前缀 /api/configurations），
+  * 含编辑（草稿）/发布/回滚/下线/版本历史；客户端读取接口为 SDK 专用，Portal 不消费 */
+ 
+-/** 配置项列表（按组过滤，非分页），附 hasUnpublishedChange 标记 */
++/** 配置项列表（命名空间/环境/组可选组合过滤，非分页），附 hasUnpublishedChange 标记 */
+ export const listConfigurations = (params: ConfigurationListQuery) =>
+   request.get<ConfigurationResponse[]>('/configurations', { ...params });
+ 
+diff --git a/web/src/api/environment.ts b/web/src/api/environment.ts
+index 72e4c00..3e348fd 100644
+--- a/web/src/api/environment.ts
++++ b/web/src/api/environment.ts
+@@ -3,8 +3,8 @@ import type { EnvironmentCreateRequest, EnvironmentResponse, EnvironmentUpdateRe
+ 
+ /** 环境接口：对应后端 EnvironmentController（路由前缀 /api/environments） */
+ 
+-/** 命名空间下环境列表（按 sortOrder 升序，非分页） */
+-export const listEnvironments = (namespaceId: number) =>
++/** 环境列表（按 sortOrder 升序，非分页）；namespaceId 缺省时查全量（axios 自动省略 undefined 参数） */
++export const listEnvironments = (namespaceId?: number) =>
+   request.get<EnvironmentResponse[]>('/environments', { namespaceId });
+ 
+ /** 创建环境，返回新建记录（含 id） */
+diff --git a/web/src/api/types.ts b/web/src/api/types.ts
+index ef530e9..dd73e89 100644
+--- a/web/src/api/types.ts
++++ b/web/src/api/types.ts
+@@ -216,9 +216,11 @@ export interface OperationLogQuery {
+   pageSize?: number;
+ }
+ 
+-/** 配置项列表查询参数 */
++/** 配置项列表查询参数：命名空间/环境/组均可选组合过滤，全不传为全量 */
+ export interface ConfigurationListQuery {
+-  groupId: number;
++  namespaceId?: number;
++  environmentId?: number;
++  groupId?: number;
+   status?: ConfigStatus;
+   keyword?: string;
+ }
+diff --git a/web/src/layouts/MainLayout.tsx b/web/src/layouts/MainLayout.tsx
+index e0c1977..f74f549 100644
+--- a/web/src/layouts/MainLayout.tsx
++++ b/web/src/layouts/MainLayout.tsx
+@@ -1,5 +1,5 @@
+-import { useEffect, useMemo, useState } from 'react';
+-import { Layout, Menu, Select, Input, Space, Typography, Tooltip } from 'antd';
++import { useMemo, useState } from 'react';
++import { Layout, Menu, Input, Typography, Tooltip } from 'antd';
+ import {
+   AppstoreOutlined,
+   AuditOutlined,
+@@ -10,10 +10,6 @@ import {
+   UserOutlined,
+ } from '@ant-design/icons';
+ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+-import { listNamespaces } from '@/api/namespace';
+-import { listEnvironments } from '@/api/environment';
+-import type { EnvironmentResponse, NamespaceResponse } from '@/api/types';
+-import { useScopeStore } from '@/store/useScopeStore';
+ 
+ const { Header, Sider, Content } = Layout;
+ 
+@@ -27,38 +23,21 @@ const menuItems = [
+ ];
+ 
+ /**
+- * 主布局：侧边栏导航 + 顶栏（命名空间/环境选择器 + 操作人输入框）+ 内容区。
+- * 命名空间与环境选中结果写入 useScopeStore，依赖上下文的页面据此联动刷新。
++ * 主布局：侧边栏导航 + 顶栏（当前页面标题 + 操作人输入框）+ 内容区。
+  */
+ export default function MainLayout() {
+   const navigate = useNavigate();
+   const location = useLocation();
+-  const { namespace, environment, setNamespace, setEnvironment } = useScopeStore();
+ 
+-  const [namespaces, setNamespaces] = useState<NamespaceResponse[]>([]);
+-  const [environments, setEnvironments] = useState<EnvironmentResponse[]>([]);
+   // 操作人：写 localStorage 的 operator，http.ts 请求拦截器读取并注入 X-Operator 头
+   const [operator, setOperator] = useState(() => localStorage.getItem('operator') || 'portal');
+ 
+-  // 启动加载命名空间列表（选择器数据源）
+-  useEffect(() => {
+-    listNamespaces().then(setNamespaces).catch(() => undefined);
+-  }, []);
+-
+-  // 命名空间变化时联动拉取其下环境列表；未选命名空间则清空选项
+-  useEffect(() => {
+-    if (!namespace) {
+-      setEnvironments([]);
+-      return;
+-    }
+-    listEnvironments(namespace.id).then(setEnvironments).catch(() => undefined);
+-  }, [namespace]);
+-
+   // 菜单高亮：深层路由（如 /configuration/:id/edit）归并到其一级菜单
+-  const selectedMenuKey = useMemo(() => {
+-    const matched = menuItems.find((item) => location.pathname.startsWith(item.key));
+-    return matched ? matched.key : '/configuration';
+-  }, [location.pathname]);
++  const currentMenuItem = useMemo(
++    () => menuItems.find((item) => location.pathname.startsWith(item.key)),
++    [location.pathname],
++  );
++  const selectedMenuKey = currentMenuItem ? currentMenuItem.key : '/configuration';
+ 
+   const handleOperatorChange = (value: string) => {
+     setOperator(value);
+@@ -102,40 +81,9 @@ export default function MainLayout() {
+             boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
+           }}
+         >
+-          <Space size="middle">
+-            <Space size={4}>
+-              <Typography.Text type="secondary">命名空间</Typography.Text>
+-              <Select
+-                style={{ width: 180 }}
+-                placeholder="选择命名空间"
+-                value={namespace?.id}
+-                options={namespaces.map((n) => ({ value: n.id, label: n.namespaceName }))}
+-                onChange={(id) => {
+-                  const target = namespaces.find((n) => n.id === id);
+-                  // store 内部会联动重置环境
+-                  setNamespace(target ? { id: target.id, key: target.namespaceKey, name: target.namespaceName } : null);
+-                }}
+-                allowClear
+-                onClear={() => setNamespace(null)}
+-              />
+-            </Space>
+-            <Space size={4}>
+-              <Typography.Text type="secondary">环境</Typography.Text>
+-              <Select
+-                style={{ width: 160 }}
+-                placeholder="选择环境"
+-                value={environment?.id}
+-                options={environments.map((e) => ({ value: e.id, label: e.environmentName }))}
+-                onChange={(id) => {
+-                  const target = environments.find((e) => e.id === id);
+-                  setEnvironment(target ? { id: target.id, key: target.environmentKey, name: target.environmentName } : null);
+-                }}
+-                allowClear
+-                onClear={() => setEnvironment(null)}
+-                disabled={!namespace}
+-              />
+-            </Space>
+-          </Space>
++          <Typography.Text strong style={{ fontSize: 16 }}>
++            {currentMenuItem?.label ?? '配置中心'}
++          </Typography.Text>
+           <Tooltip title="操作人：写入操作审计日志的身份标识">
+             <Input
+               style={{ width: 160 }}
+diff --git a/web/src/pages/audit/OperationLogList.tsx b/web/src/pages/audit/OperationLogList.tsx
+index 1a620ac..9dcc6fd 100644
+--- a/web/src/pages/audit/OperationLogList.tsx
++++ b/web/src/pages/audit/OperationLogList.tsx
+@@ -14,7 +14,6 @@ import type {
+   OperationLogResponse,
+ } from '@/api/types';
+ import { useTableRequest } from '@/hooks/useTableRequest';
+-import { useScopeStore } from '@/store/useScopeStore';
+ import PageContainer from '@/components/PageContainer';
+ 
+ /** 检索表单字段：时间范围为 Dayjs 区间，提交时转 ISO 字符串 */
+@@ -56,14 +55,10 @@ const formatDetail = (detail: string) => {
+ 
+ /** 操作审计页：多维度检索表单 + 分页日志表格 + detail JSON 展开查看 */
+ export default function OperationLogList() {
+-  const scopeNamespace = useScopeStore((s) => s.namespace);
+-  const scopeEnvironment = useScopeStore((s) => s.environment);
+   const [form] = Form.useForm<LogSearchValues>();
+ 
+-  // 生效中的查询参数：表单点「查询」或分页/scope 切换时更新
++  // 生效中的查询参数：表单点「查询」或分页切换时更新（初值为空 = 全部）
+   const [query, setQuery] = useState<OperationLogQuery>(() => ({
+-    namespaceId: scopeNamespace?.id,
+-    environmentId: scopeEnvironment?.id,
+     pageIndex: 1,
+     pageSize: 20,
+   }));
+@@ -104,24 +99,6 @@ export default function OperationLogList() {
+       .catch(() => undefined);
+   }, [watchNamespaceId, watchEnvironmentId]);
+ 
+-  // 顶栏 scope 切换时同步表单与查询条件并自动刷新（下级过滤条件随之重置）
+-  useEffect(() => {
+-    form.setFieldsValue({
+-      namespaceId: scopeNamespace?.id,
+-      environmentId: scopeEnvironment?.id,
+-      groupId: undefined,
+-      configurationId: undefined,
+-    });
+-    setQuery((prev) => ({
+-      ...prev,
+-      namespaceId: scopeNamespace?.id,
+-      environmentId: scopeEnvironment?.id,
+-      groupId: undefined,
+-      configurationId: undefined,
+-      pageIndex: 1,
+-    }));
+-  }, [scopeNamespace, scopeEnvironment, form]);
+-
+   // 点「查询」：以表单值重建查询参数并回到第一页；时间区间转 ISO 字符串（[startTime, endTime)）
+   const handleSearch = (values: LogSearchValues) => {
+     const [start, end] = values.timeRange ?? [null, null];
+diff --git a/web/src/pages/configuration/ConfigurationList.tsx b/web/src/pages/configuration/ConfigurationList.tsx
+index 750d14d..79a69f6 100644
+--- a/web/src/pages/configuration/ConfigurationList.tsx
++++ b/web/src/pages/configuration/ConfigurationList.tsx
+@@ -1,8 +1,7 @@
+-import { useCallback, useEffect, useState } from 'react';
++import { useCallback, useEffect, useMemo, useState } from 'react';
+ import {
+   Button,
+   Dropdown,
+-  Empty,
+   Form,
+   Input,
+   Modal,
+@@ -25,17 +24,33 @@ import {
+   publishConfiguration,
+ } from '@/api/configuration';
+ import { listGroups } from '@/api/group';
+-import type { ConfigFormat, ConfigurationGroupResponse, ConfigurationResponse } from '@/api/types';
++import { listNamespaces } from '@/api/namespace';
++import { listEnvironments } from '@/api/environment';
++import type {
++  ConfigFormat,
++  ConfigStatus,
++  ConfigurationGroupResponse,
++  ConfigurationResponse,
++  EnvironmentResponse,
++  NamespaceResponse,
++} from '@/api/types';
+ import StatusTag from '@/components/StatusTag';
+ import FormatSelect from '@/components/FormatSelect';
+ import PageContainer from '@/components/PageContainer';
+-import ScopeEmpty from '@/components/ScopeEmpty';
+-import { useScopeStore } from '@/store/useScopeStore';
++import ContentPreview from '@/components/ContentPreview';
++import FormDrawer from '@/components/FormDrawer';
+ import { useTableRequest } from '@/hooks/useTableRequest';
+ 
+ /** 时间字段本地化展示（ISO 8601 → 本地时间字符串） */
+ const formatTime = (value: string | null) => (value ? new Date(value).toLocaleString() : '-');
+ 
++/** 状态筛选选项（与 StatusTag 文案对齐） */
++const statusOptions: { value: ConfigStatus; label: string }[] = [
++  { value: 'DRAFT', label: '草稿' },
++  { value: 'PUBLISHED', label: '已发布' },
++  { value: 'OFFLINE', label: '已下线' },
++];
++
+ /** 新建配置表单值 */
+ interface CreateFormValues {
+   groupId: number;
+@@ -45,56 +60,68 @@ interface CreateFormValues {
+ }
+ 
+ /**
+- * 配置项列表页：限当前命名空间 + 环境，按配置组过滤；
++ * 配置项列表页：命名空间/环境/配置组三级级联 + 状态 + Key 关键字组合筛选（全可选，默认全量）；
+  * 行操作：编辑 / 发布 / 下线 / 删除 / 版本历史；支持新建配置。
+  */
+ export default function ConfigurationList() {
+   const navigate = useNavigate();
+-  const { namespace, environment } = useScopeStore();
+ 
+-  // 配置组下拉数据源与当前选中组（列表接口要求 groupId 必传）
++  // 筛选条件：命名空间 → 环境 → 配置组三级级联，均可为空（空 = 不过滤）
++  const [namespaceId, setNamespaceId] = useState<number | undefined>(undefined);
++  const [environmentId, setEnvironmentId] = useState<number | undefined>(undefined);
++  const [groupId, setGroupId] = useState<number | undefined>(undefined);
++  const [status, setStatus] = useState<ConfigStatus | undefined>(undefined);
++  // keyword 拆两个 state：输入框受控值 + 点搜索/回车后生效的查询值（非输入即查）
++  const [keywordInput, setKeywordInput] = useState('');
++  const [keyword, setKeyword] = useState('');
++
++  // 级联下拉数据源
++  const [namespaces, setNamespaces] = useState<NamespaceResponse[]>([]);
++  const [environments, setEnvironments] = useState<EnvironmentResponse[]>([]);
+   const [groups, setGroups] = useState<ConfigurationGroupResponse[]>([]);
+-  const [groupId, setGroupId] = useState<number | null>(null);
+ 
+   // 发布弹窗：当前待发布的配置项
+   const [publishTarget, setPublishTarget] = useState<ConfigurationResponse | null>(null);
+   const [publishForm] = Form.useForm<{ changeRemark?: string }>();
+   const [publishing, setPublishing] = useState(false);
+ 
+-  // 新建配置弹窗
++  // 新建配置抽屉
+   const [createOpen, setCreateOpen] = useState(false);
+   const [createForm] = Form.useForm<CreateFormValues>();
+   const [creating, setCreating] = useState(false);
+ 
+-  // 命名空间/环境变化时联动拉取配置组，并默认选中第一个组
++  // 命名空间选择器数据源（一次性加载）
+   useEffect(() => {
+-    if (!namespace || !environment) {
+-      setGroups([]);
+-      setGroupId(null);
+-      return;
+-    }
+-    listGroups({ namespaceId: namespace.id, environmentId: environment.id })
+-      .then((list) => {
+-        setGroups(list);
+-        // 原选中组仍存在则保留，否则默认选第一个组
+-        setGroupId((prev) => (list.some((g) => g.id === prev) ? prev : list[0]?.id ?? null));
+-      })
+-      .catch(() => undefined);
+-  }, [namespace, environment]);
++    listNamespaces().then(setNamespaces).catch(() => undefined);
++  }, []);
+ 
+-  // 未选中配置组时不发请求（返回空列表占位）
+-  const fetcher = useCallback(() => {
+-    if (!groupId) {
+-      return Promise.resolve<ConfigurationResponse[]>([]);
+-    }
+-    return listConfigurations({ groupId });
+-  }, [groupId]);
++  // 环境选项：选了命名空间则按其过滤，否则全量
++  useEffect(() => {
++    listEnvironments(namespaceId).then(setEnvironments).catch(() => undefined);
++  }, [namespaceId]);
++
++  // 配置组选项：按当前所选命名空间/环境过滤（均可选，全不传为全量）；
++  // 该列表同时作为表格「所属配置组」列的 id → 名称映射数据源
++  useEffect(() => {
++    listGroups({ namespaceId, environmentId }).then(setGroups).catch(() => undefined);
++  }, [namespaceId, environmentId]);
++
++  // 任一筛选条件变化即重载（useTableRequest 依赖 fetcher 引用，已防竞态）
++  const fetcher = useCallback(
++    () =>
++      listConfigurations({
++        namespaceId,
++        environmentId,
++        groupId,
++        status,
++        keyword: keyword || undefined,
++      }),
++    [namespaceId, environmentId, groupId, status, keyword],
++  );
+   const { data, loading, reload } = useTableRequest(fetcher);
+ 
+-  // 未选择命名空间或环境：Empty 引导，不发任何请求
+-  if (!namespace || !environment) {
+-    return <ScopeEmpty />;
+-  }
++  // groupId → groupName 映射（映射不到时列内兜底展示 组#id）
++  const groupNameMap = useMemo(() => new Map(groups.map((g) => [g.id, g.groupName])), [groups]);
+ 
+   /** 发布确认：填变更备注后调用发布接口 */
+   const handlePublish = async () => {
+@@ -152,12 +179,8 @@ export default function ConfigurationList() {
+       message.success('新建配置成功');
+       setCreateOpen(false);
+       createForm.resetFields();
+-      // 新建的配置属于所选组，若与当前过滤组一致则列表可见
+-      if (values.groupId === groupId) {
+-        reload();
+-      } else {
+-        setGroupId(values.groupId);
+-      }
++      // 列表支持跨组展示，新建后直接刷新即可
++      reload();
+     } catch {
+       // 错误提示已由拦截器统一处理
+     } finally {
+@@ -166,12 +189,27 @@ export default function ConfigurationList() {
+   };
+ 
+   const columns: ColumnsType<ConfigurationResponse> = [
+-    { title: '配置 Key', dataIndex: 'configurationKey', key: 'configurationKey' },
++    { title: '配置 Key', dataIndex: 'configurationKey', key: 'configurationKey', ellipsis: true },
++    {
++      title: '所属配置组',
++      dataIndex: 'groupId',
++      key: 'groupId',
++      width: 150,
++      ellipsis: true,
++      render: (id: number) => groupNameMap.get(id) ?? `组#${id}`,
++    },
++    {
++      title: '内容',
++      dataIndex: 'content',
++      key: 'content',
++      width: 240,
++      render: (_, record) => <ContentPreview content={record.content} format={record.format} />,
++    },
+     {
+       title: '格式',
+       dataIndex: 'format',
+       key: 'format',
+-      width: 100,
++      width: 90,
+       render: (format: string) => <Tag>{format}</Tag>,
+     },
+     {
+@@ -185,14 +223,14 @@ export default function ConfigurationList() {
+       title: '最新版本',
+       dataIndex: 'latestVersionNumber',
+       key: 'latestVersionNumber',
+-      width: 100,
++      width: 90,
+       render: (n: number) => (n > 0 ? `v${n}` : '-'),
+     },
+     {
+       title: '未发布变更',
+       dataIndex: 'hasUnpublishedChange',
+       key: 'hasUnpublishedChange',
+-      width: 130,
++      width: 120,
+       // hasUnpublishedChange 由服务端计算，前端只做展示
+       render: (has: boolean) =>
+         has ? (
+@@ -207,13 +245,13 @@ export default function ConfigurationList() {
+       title: '更新时间',
+       dataIndex: 'updatedAt',
+       key: 'updatedAt',
+-      width: 180,
++      width: 170,
+       render: (value: string) => formatTime(value),
+     },
+     {
+       title: '操作',
+       key: 'actions',
+-      width: 260,
++      width: 250,
+       render: (_, record) => (
+         <Space size={4}>
+           <Button type="link" size="small" onClick={() => navigate(`/configuration/${record.id}/edit`)}>
+@@ -276,42 +314,81 @@ export default function ConfigurationList() {
+     <PageContainer
+       title="配置管理"
+       extra={
+-        <Space>
+-          <Select
+-            style={{ width: 220 }}
+-            placeholder="选择配置组"
+-            value={groupId ?? undefined}
+-            options={groups.map((g) => ({ value: g.id, label: g.groupName }))}
+-            onChange={(id) => setGroupId(id)}
+-          />
+-          <Button
+-            type="primary"
+-            icon={<PlusOutlined />}
+-            disabled={groups.length === 0}
+-            onClick={() => {
+-              createForm.resetFields();
+-              // 默认选中当前过滤的配置组
+-              createForm.setFieldsValue({ groupId: groupId ?? undefined, format: 'text' });
+-              setCreateOpen(true);
+-            }}
+-          >
+-            新建配置
+-          </Button>
+-        </Space>
++        <Button
++          type="primary"
++          icon={<PlusOutlined />}
++          onClick={() => {
++            createForm.resetFields();
++            // 默认选中当前过滤的配置组（未过滤时留空，表单内组必选）
++            createForm.setFieldsValue({ groupId, format: 'text' });
++            setCreateOpen(true);
++          }}
++        >
++          新建配置
++        </Button>
+       }
+     >
+-      {groups.length === 0 ? (
+-        <Empty description="当前命名空间 + 环境下暂无配置组，请先创建配置组" />
+-      ) : (
+-        <Table<ConfigurationResponse>
+-          rowKey="id"
+-          columns={columns}
+-          dataSource={data ?? []}
+-          loading={loading}
+-          pagination={false}
+-          size="middle"
++      {/* 筛选区：命名空间 → 环境 → 配置组三级级联 + 状态 + Key 关键字 */}
++      <Space wrap style={{ marginBottom: 16 }}>
++        <Select
++          style={{ width: 180 }}
++          placeholder="全部命名空间"
++          allowClear
++          value={namespaceId}
++          options={namespaces.map((n) => ({ value: n.id, label: n.namespaceName }))}
++          onChange={(id) => {
++            // 命名空间变化时清空下级环境/配置组选中值
++            setNamespaceId(id);
++            setEnvironmentId(undefined);
++            setGroupId(undefined);
++          }}
++        />
++        <Select
++          style={{ width: 150 }}
++          placeholder="全部环境"
++          allowClear
++          value={environmentId}
++          options={environments.map((e) => ({ value: e.id, label: e.environmentName }))}
++          onChange={(id) => {
++            // 环境变化时清空下级配置组选中值
++            setEnvironmentId(id);
++            setGroupId(undefined);
++          }}
+         />
+-      )}
++        <Select
++          style={{ width: 200 }}
++          placeholder="全部配置组"
++          allowClear
++          value={groupId}
++          options={groups.map((g) => ({ value: g.id, label: g.groupName }))}
++          onChange={(id) => setGroupId(id)}
++        />
++        <Select
++          style={{ width: 130 }}
++          placeholder="全部状态"
++          allowClear
++          value={status}
++          options={statusOptions}
++          onChange={(v) => setStatus(v)}
++        />
++        <Input.Search
++          style={{ width: 240 }}
++          placeholder="按配置 Key 搜索"
++          allowClear
++          value={keywordInput}
++          onChange={(e) => setKeywordInput(e.target.value)}
++          onSearch={(value) => setKeyword(value.trim())}
++        />
++      </Space>
++
++      <Table<ConfigurationResponse>
++        rowKey="id"
++        columns={columns}
++        dataSource={data ?? []}
++        loading={loading}
++        pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
++        size="middle"
++      />
+ 
+       {/* 发布弹窗：填写变更备注后发布 */}
+       <Modal
+@@ -321,6 +398,8 @@ export default function ConfigurationList() {
+         onCancel={() => setPublishTarget(null)}
+         confirmLoading={publishing}
+         okText="发布"
++        width={520}
++        maskClosable={false}
+         destroyOnClose
+       >
+         <Form form={publishForm} layout="vertical">
+@@ -330,15 +409,15 @@ export default function ConfigurationList() {
+         </Form>
+       </Modal>
+ 
+-      {/* 新建配置弹窗 */}
+-      <Modal
++      {/* 新建配置抽屉：脏表单关闭二次确认由 FormDrawer 内置 */}
++      <FormDrawer
+         title="新建配置"
+         open={createOpen}
+-        onOk={handleCreate}
+-        onCancel={() => setCreateOpen(false)}
+-        confirmLoading={creating}
++        onClose={() => setCreateOpen(false)}
++        onSubmit={handleCreate}
++        loading={creating}
++        form={createForm}
+         okText="创建"
+-        destroyOnClose
+       >
+         <Form form={createForm} layout="vertical">
+           <Form.Item name="groupId" label="配置组" rules={[{ required: true, message: '请选择配置组' }]}>
+@@ -358,7 +437,7 @@ export default function ConfigurationList() {
+             <Input.TextArea rows={2} placeholder="配置用途说明（可选）" maxLength={500} />
+           </Form.Item>
+         </Form>
+-      </Modal>
++      </FormDrawer>
+     </PageContainer>
+   );
+ }
+diff --git a/web/src/pages/environment/EnvironmentList.tsx b/web/src/pages/environment/EnvironmentList.tsx
+index 9241b98..9ad9e2d 100644
+--- a/web/src/pages/environment/EnvironmentList.tsx
++++ b/web/src/pages/environment/EnvironmentList.tsx
+@@ -5,8 +5,8 @@ import {
+   Form,
+   Input,
+   InputNumber,
+-  Modal,
+   Popconfirm,
++  Select,
+   Space,
+   Table,
+   Tag,
+@@ -15,14 +15,15 @@ import {
+ import { PlusOutlined } from '@ant-design/icons';
+ import type { ColumnsType } from 'antd/es/table';
+ import { createEnvironment, deleteEnvironment, listEnvironments, updateEnvironment } from '@/api/environment';
++import { listNamespaces } from '@/api/namespace';
+ import type { EnvironmentResponse } from '@/api/types';
+ import { useTableRequest } from '@/hooks/useTableRequest';
+-import { useScopeStore } from '@/store/useScopeStore';
+ import PageContainer from '@/components/PageContainer';
+-import ScopeEmpty from '@/components/ScopeEmpty';
++import FormDrawer from '@/components/FormDrawer';
+ 
+-/** 弹窗表单字段：新建含 key，编辑时 key 只读展示不提交 */
++/** 抽屉表单字段：新建含命名空间与 key，编辑时两者只读展示不提交 */
+ interface EnvironmentFormValues {
++  namespaceId: number;
+   environmentKey: string;
+   environmentName: string;
+   description?: string;
+@@ -32,47 +33,54 @@ interface EnvironmentFormValues {
+ /** ISO 时间字符串 → 本地可读格式 */
+ const formatTime = (iso: string) => new Date(iso).toLocaleString('zh-CN', { hour12: false });
+ 
+-/** 环境管理页：限定当前命名空间；未选命名空间时 Empty 引导且不发请求 */
++/** 环境管理页：命名空间筛选（不选=全部）+ 关键字本地过滤 + 新建/编辑抽屉 */
+ export default function EnvironmentList() {
+-  const namespace = useScopeStore((s) => s.namespace);
+-  // namespace 变化时 fetcher 引用变化，useTableRequest 自动重新加载
+-  const fetcher = useCallback(
+-    () => (namespace ? listEnvironments(namespace.id) : Promise.resolve([] as EnvironmentResponse[])),
+-    [namespace],
+-  );
++  // 命名空间列表：筛选区下拉 / 表格列名称映射 / 抽屉表单共用同一份数据
++  const { data: namespaces } = useTableRequest(listNamespaces);
++  // 命名空间筛选：undefined 表示查全部
++  const [filterNamespaceId, setFilterNamespaceId] = useState<number>();
++  // 关键字筛选：前端本地过滤名称 / Key
++  const [keyword, setKeyword] = useState('');
++  // 筛选命名空间变化时 fetcher 引用变化，useTableRequest 自动重新加载
++  const fetcher = useCallback(() => listEnvironments(filterNamespaceId), [filterNamespaceId]);
+   const { data, loading, reload } = useTableRequest(fetcher);
+ 
+-  const [modalOpen, setModalOpen] = useState(false);
++  const [drawerOpen, setDrawerOpen] = useState(false);
+   // 当前编辑的记录，null 表示新建
+   const [editing, setEditing] = useState<EnvironmentResponse | null>(null);
+   const [submitting, setSubmitting] = useState(false);
+   const [form] = Form.useForm<EnvironmentFormValues>();
+ 
+-  // 未选命名空间：统一空态引导先在顶部选择，不发任何请求
+-  if (!namespace) {
+-    return (
+-      <PageContainer title="环境管理">
+-        <ScopeEmpty message="请先在顶部选择命名空间" />
+-      </PageContainer>
+-    );
+-  }
++  const namespaceOptions = (namespaces ?? []).map((n) => ({ label: n.namespaceName, value: n.id }));
++  const namespaceNameMap = new Map(
++    (namespaces ?? []).map((n): [number, string] => [n.id, n.namespaceName]),
++  );
++
++  const kw = keyword.trim().toLowerCase();
++  const filteredData = (data ?? []).filter(
++    (item) =>
++      !kw ||
++      item.environmentName.toLowerCase().includes(kw) ||
++      item.environmentKey.toLowerCase().includes(kw),
++  );
+ 
+   const openCreate = () => {
+     setEditing(null);
+     form.resetFields();
+     form.setFieldsValue({ sortOrder: 0 });
+-    setModalOpen(true);
++    setDrawerOpen(true);
+   };
+ 
+   const openEdit = (record: EnvironmentResponse) => {
+     setEditing(record);
+     form.setFieldsValue({
++      namespaceId: record.namespaceId,
+       environmentKey: record.environmentKey,
+       environmentName: record.environmentName,
+       description: record.description ?? undefined,
+       sortOrder: record.sortOrder,
+     });
+-    setModalOpen(true);
++    setDrawerOpen(true);
+   };
+ 
+   // 新建/编辑提交：错误提示由 http.ts 拦截器统一弹出，这里只处理成功分支
+@@ -90,12 +98,12 @@ export default function EnvironmentList() {
+           environmentName: values.environmentName,
+           description: values.description ?? null,
+           sortOrder: values.sortOrder,
+-          status: editing.status, // 状态由列表行内切换维护，编辑弹窗不改
++          status: editing.status, // 状态由列表行内切换维护，编辑抽屉不改
+         });
+         message.success('更新成功');
+       } else {
+         await createEnvironment({
+-          namespaceId: namespace.id,
++          namespaceId: values.namespaceId,
+           environmentKey: values.environmentKey,
+           environmentName: values.environmentName,
+           description: values.description ?? null,
+@@ -103,7 +111,7 @@ export default function EnvironmentList() {
+         });
+         message.success('创建成功');
+       }
+-      setModalOpen(false);
++      setDrawerOpen(false);
+       reload();
+     } catch {
+       // 接口错误已由拦截器提示
+@@ -140,6 +148,12 @@ export default function EnvironmentList() {
+   };
+ 
+   const columns: ColumnsType<EnvironmentResponse> = [
++    {
++      title: '所属命名空间',
++      dataIndex: 'namespaceId',
++      width: 150,
++      render: (v: number) => namespaceNameMap.get(v) ?? String(v),
++    },
+     { title: 'Key', dataIndex: 'environmentKey' },
+     { title: '名称', dataIndex: 'environmentName' },
+     { title: '描述', dataIndex: 'description', render: (v: string | null) => v || '-' },
+@@ -181,31 +195,64 @@ export default function EnvironmentList() {
+ 
+   return (
+     <PageContainer
+-      title={`环境管理（${namespace.name}）`}
++      title="环境管理"
+       extra={
+         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+           新建环境
+         </Button>
+       }
+     >
++      <Space wrap style={{ marginBottom: 16 }}>
++        <Select
++          allowClear
++          placeholder="全部命名空间"
++          style={{ width: 200 }}
++          value={filterNamespaceId}
++          options={namespaceOptions}
++          onChange={(v?: number) => setFilterNamespaceId(v)}
++        />
++        <Input.Search
++          allowClear
++          placeholder="搜索名称 / Key"
++          style={{ width: 240 }}
++          onSearch={setKeyword}
++          onChange={(e) => {
++            // 点清空按钮或删空输入时立即还原全量
++            if (!e.target.value) setKeyword('');
++          }}
++        />
++      </Space>
+       <Table<EnvironmentResponse>
+         rowKey="id"
+         size="middle"
+         columns={columns}
+-        dataSource={data ?? []}
++        dataSource={filteredData}
+         loading={loading}
+-        pagination={false}
++        pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
+       />
+-      <Modal
++      <FormDrawer
+         title={editing ? '编辑环境' : '新建环境'}
+-        open={modalOpen}
+-        width={520}
+-        onOk={handleSubmit}
+-        confirmLoading={submitting}
+-        onCancel={() => setModalOpen(false)}
+-        destroyOnClose
++        open={drawerOpen}
++        onClose={() => setDrawerOpen(false)}
++        onSubmit={handleSubmit}
++        loading={submitting}
++        form={form}
++        okText={editing ? '保存' : '创建'}
+       >
+         <Form form={form} layout="vertical">
++          <Form.Item
++            name="namespaceId"
++            label="命名空间"
++            rules={[{ required: true, message: '请选择命名空间' }]}
++          >
++            <Select
++              placeholder="请选择命名空间"
++              options={namespaceOptions}
++              disabled={!!editing}
++              showSearch
++              optionFilterProp="label"
++            />
++          </Form.Item>
+           <Form.Item
+             name="environmentKey"
+             label="Key"
+@@ -231,7 +278,7 @@ export default function EnvironmentList() {
+             <Input.TextArea rows={3} placeholder="可选" />
+           </Form.Item>
+         </Form>
+-      </Modal>
++      </FormDrawer>
+     </PageContainer>
+   );
+ }
+diff --git a/web/src/pages/group/GroupList.tsx b/web/src/pages/group/GroupList.tsx
+index f334e92..0271243 100644
+--- a/web/src/pages/group/GroupList.tsx
++++ b/web/src/pages/group/GroupList.tsx
+@@ -4,8 +4,8 @@ import {
+   Divider,
+   Form,
+   Input,
+-  Modal,
+   Popconfirm,
++  Select,
+   Space,
+   Table,
+   Tag,
+@@ -14,14 +14,17 @@ import {
+ import { PlusOutlined } from '@ant-design/icons';
+ import type { ColumnsType } from 'antd/es/table';
+ import { createGroup, deleteGroup, listGroups, updateGroup } from '@/api/group';
+-import type { ConfigurationGroupResponse } from '@/api/types';
++import { listEnvironments } from '@/api/environment';
++import { listNamespaces } from '@/api/namespace';
++import type { ConfigurationGroupResponse, EnvironmentResponse } from '@/api/types';
+ import { useTableRequest } from '@/hooks/useTableRequest';
+-import { useScopeStore } from '@/store/useScopeStore';
+ import PageContainer from '@/components/PageContainer';
+-import ScopeEmpty from '@/components/ScopeEmpty';
++import FormDrawer from '@/components/FormDrawer';
+ 
+-/** 弹窗表单字段：新建含 key，编辑时 key 只读展示不提交 */
++/** 抽屉表单字段：新建含命名空间/环境/key，编辑时三者只读展示不提交 */
+ interface GroupFormValues {
++  namespaceId: number;
++  environmentId: number;
+   groupKey: string;
+   groupName: string;
+   description?: string;
+@@ -30,49 +33,87 @@ interface GroupFormValues {
+ /** ISO 时间字符串 → 本地可读格式 */
+ const formatTime = (iso: string) => new Date(iso).toLocaleString('zh-CN', { hour12: false });
+ 
+-/** 配置组管理页：限定当前命名空间 + 环境；任一未选时 Empty 引导且不发请求 */
++/** 配置组管理页：命名空间/环境级联筛选（均可不选=全部）+ 关键字本地过滤 + 新建/编辑抽屉 */
+ export default function GroupList() {
+-  const namespace = useScopeStore((s) => s.namespace);
+-  const environment = useScopeStore((s) => s.environment);
+-  // 上下文变化时 fetcher 引用变化，useTableRequest 自动重新加载
++  // 命名空间列表：筛选区下拉 / 表格列名称映射 / 抽屉表单共用同一份数据
++  const { data: namespaces } = useTableRequest(listNamespaces);
++  // 筛选条件：均为 undefined 时查全部
++  const [filterNamespaceId, setFilterNamespaceId] = useState<number>();
++  const [filterEnvironmentId, setFilterEnvironmentId] = useState<number>();
++  // 关键字筛选：前端本地过滤名称 / Key
++  const [keyword, setKeyword] = useState('');
++
++  // 筛选区环境选项：选了命名空间则拉该空间下环境，否则全量（同时用于表格列名称映射）
++  const envFetcher = useCallback(() => listEnvironments(filterNamespaceId), [filterNamespaceId]);
++  const { data: environments } = useTableRequest(envFetcher);
++
++  // 筛选条件变化时 fetcher 引用变化，useTableRequest 自动重新加载
+   const fetcher = useCallback(
+-    () =>
+-      namespace && environment
+-        ? listGroups({ namespaceId: namespace.id, environmentId: environment.id })
+-        : Promise.resolve([] as ConfigurationGroupResponse[]),
+-    [namespace, environment],
++    () => listGroups({ namespaceId: filterNamespaceId, environmentId: filterEnvironmentId }),
++    [filterNamespaceId, filterEnvironmentId],
+   );
+   const { data, loading, reload } = useTableRequest(fetcher);
+ 
+-  const [modalOpen, setModalOpen] = useState(false);
++  const [drawerOpen, setDrawerOpen] = useState(false);
+   // 当前编辑的记录，null 表示新建
+   const [editing, setEditing] = useState<ConfigurationGroupResponse | null>(null);
+   const [submitting, setSubmitting] = useState(false);
++  // 抽屉表单内的环境级联选项：按表单中选择的命名空间加载
++  const [formEnvironments, setFormEnvironments] = useState<EnvironmentResponse[]>([]);
+   const [form] = Form.useForm<GroupFormValues>();
+ 
+-  // 命名空间或环境任一未选：统一空态引导先在顶部选择，不发任何请求
+-  if (!namespace || !environment) {
+-    return (
+-      <PageContainer title="配置组管理">
+-        <ScopeEmpty />
+-      </PageContainer>
+-    );
+-  }
++  const namespaceOptions = (namespaces ?? []).map((n) => ({ label: n.namespaceName, value: n.id }));
++  const environmentOptions = (environments ?? []).map((e) => ({
++    label: e.environmentName,
++    value: e.id,
++  }));
++  const namespaceNameMap = new Map(
++    (namespaces ?? []).map((n): [number, string] => [n.id, n.namespaceName]),
++  );
++  const environmentNameMap = new Map(
++    (environments ?? []).map((e): [number, string] => [e.id, e.environmentName]),
++  );
++
++  const kw = keyword.trim().toLowerCase();
++  const filteredData = (data ?? []).filter(
++    (item) =>
++      !kw || item.groupName.toLowerCase().includes(kw) || item.groupKey.toLowerCase().includes(kw),
++  );
++
++  // 表单级联：优先复用筛选区已加载的环境数据，避免重复请求
++  const loadFormEnvironments = (nsId: number) => {
++    if (environments && filterNamespaceId === undefined) {
++      // 筛选区未选命名空间时已持有全量环境，本地过滤即可
++      setFormEnvironments(environments.filter((e) => e.namespaceId === nsId));
++      return;
++    }
++    if (environments && filterNamespaceId === nsId) {
++      setFormEnvironments(environments);
++      return;
++    }
++    listEnvironments(nsId)
++      .then(setFormEnvironments)
++      .catch(() => undefined); // 接口错误已由拦截器提示
++  };
+ 
+   const openCreate = () => {
+     setEditing(null);
+     form.resetFields();
+-    setModalOpen(true);
++    setFormEnvironments([]);
++    setDrawerOpen(true);
+   };
+ 
+   const openEdit = (record: ConfigurationGroupResponse) => {
+     setEditing(record);
++    loadFormEnvironments(record.namespaceId); // 让只读环境下拉能展示名称
+     form.setFieldsValue({
++      namespaceId: record.namespaceId,
++      environmentId: record.environmentId,
+       groupKey: record.groupKey,
+       groupName: record.groupName,
+       description: record.description ?? undefined,
+     });
+-    setModalOpen(true);
++    setDrawerOpen(true);
+   };
+ 
+   // 新建/编辑提交：错误提示由 http.ts 拦截器统一弹出，这里只处理成功分支
+@@ -89,20 +130,20 @@ export default function GroupList() {
+         await updateGroup(editing.id, {
+           groupName: values.groupName,
+           description: values.description ?? null,
+-          status: editing.status, // 状态由列表行内切换维护，编辑弹窗不改
++          status: editing.status, // 状态由列表行内切换维护，编辑抽屉不改
+         });
+         message.success('更新成功');
+       } else {
+         await createGroup({
+-          namespaceId: namespace.id,
+-          environmentId: environment.id,
++          namespaceId: values.namespaceId,
++          environmentId: values.environmentId,
+           groupKey: values.groupKey,
+           groupName: values.groupName,
+           description: values.description ?? null,
+         });
+         message.success('创建成功');
+       }
+-      setModalOpen(false);
++      setDrawerOpen(false);
+       reload();
+     } catch {
+       // 接口错误已由拦截器提示
+@@ -138,6 +179,18 @@ export default function GroupList() {
+   };
+ 
+   const columns: ColumnsType<ConfigurationGroupResponse> = [
++    {
++      title: '命名空间',
++      dataIndex: 'namespaceId',
++      width: 130,
++      render: (v: number) => namespaceNameMap.get(v) ?? String(v),
++    },
++    {
++      title: '环境',
++      dataIndex: 'environmentId',
++      width: 110,
++      render: (v: number) => environmentNameMap.get(v) ?? String(v),
++    },
+     { title: 'Key', dataIndex: 'groupKey' },
+     { title: '名称', dataIndex: 'groupName' },
+     { title: '描述', dataIndex: 'description', render: (v: string | null) => v || '-' },
+@@ -178,31 +231,91 @@ export default function GroupList() {
+ 
+   return (
+     <PageContainer
+-      title={`配置组管理（${namespace.name} / ${environment.name}）`}
++      title="配置组管理"
+       extra={
+         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+           新建配置组
+         </Button>
+       }
+     >
++      <Space wrap style={{ marginBottom: 16 }}>
++        <Select
++          allowClear
++          placeholder="全部命名空间"
++          style={{ width: 200 }}
++          value={filterNamespaceId}
++          options={namespaceOptions}
++          onChange={(v?: number) => {
++            setFilterNamespaceId(v);
++            setFilterEnvironmentId(undefined); // 命名空间变化时清空环境选中值
++          }}
++        />
++        <Select
++          allowClear
++          placeholder="全部环境"
++          style={{ width: 180 }}
++          value={filterEnvironmentId}
++          options={environmentOptions}
++          onChange={(v?: number) => setFilterEnvironmentId(v)}
++        />
++        <Input.Search
++          allowClear
++          placeholder="搜索名称 / Key"
++          style={{ width: 240 }}
++          onSearch={setKeyword}
++          onChange={(e) => {
++            // 点清空按钮或删空输入时立即还原全量
++            if (!e.target.value) setKeyword('');
++          }}
++        />
++      </Space>
+       <Table<ConfigurationGroupResponse>
+         rowKey="id"
+         size="middle"
+         columns={columns}
+-        dataSource={data ?? []}
++        dataSource={filteredData}
+         loading={loading}
+-        pagination={false}
++        pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
+       />
+-      <Modal
++      <FormDrawer
+         title={editing ? '编辑配置组' : '新建配置组'}
+-        open={modalOpen}
+-        width={520}
+-        onOk={handleSubmit}
+-        confirmLoading={submitting}
+-        onCancel={() => setModalOpen(false)}
+-        destroyOnClose
++        open={drawerOpen}
++        onClose={() => setDrawerOpen(false)}
++        onSubmit={handleSubmit}
++        loading={submitting}
++        form={form}
++        okText={editing ? '保存' : '创建'}
+       >
+         <Form form={form} layout="vertical">
++          <Form.Item
++            name="namespaceId"
++            label="命名空间"
++            rules={[{ required: true, message: '请选择命名空间' }]}
++          >
++            <Select
++              placeholder="请选择命名空间"
++              options={namespaceOptions}
++              disabled={!!editing}
++              showSearch
++              optionFilterProp="label"
++              onChange={(v: number) => {
++                // 级联：切换命名空间后清空已选环境并重载环境选项
++                form.setFieldsValue({ environmentId: undefined });
++                loadFormEnvironments(v);
++              }}
++            />
++          </Form.Item>
++          <Form.Item
++            name="environmentId"
++            label="环境"
++            rules={[{ required: true, message: '请选择环境' }]}
++          >
++            <Select
++              placeholder={formEnvironments.length ? '请选择环境' : '请先选择命名空间'}
++              options={formEnvironments.map((e) => ({ label: e.environmentName, value: e.id }))}
++              disabled={!!editing}
++            />
++          </Form.Item>
+           <Form.Item
+             name="groupKey"
+             label="Key"
+@@ -221,7 +334,7 @@ export default function GroupList() {
+             <Input.TextArea rows={3} placeholder="可选" />
+           </Form.Item>
+         </Form>
+-      </Modal>
++      </FormDrawer>
+     </PageContainer>
+   );
+ }
+diff --git a/web/src/pages/namespace/NamespaceList.tsx b/web/src/pages/namespace/NamespaceList.tsx
+index c15d669..9c7bff3 100644
+--- a/web/src/pages/namespace/NamespaceList.tsx
++++ b/web/src/pages/namespace/NamespaceList.tsx
+@@ -1,13 +1,14 @@
+ import { useState } from 'react';
+-import { Button, Divider, Form, Input, Modal, Popconfirm, Space, Table, Tag, message } from 'antd';
++import { Button, Divider, Form, Input, Popconfirm, Space, Table, Tag, message } from 'antd';
+ import { PlusOutlined } from '@ant-design/icons';
+ import type { ColumnsType } from 'antd/es/table';
+ import { createNamespace, deleteNamespace, listNamespaces, updateNamespace } from '@/api/namespace';
+ import type { NamespaceResponse } from '@/api/types';
+ import { useTableRequest } from '@/hooks/useTableRequest';
+ import PageContainer from '@/components/PageContainer';
++import FormDrawer from '@/components/FormDrawer';
+ 
+-/** 弹窗表单字段：新建含 key，编辑时 key 只读展示不提交 */
++/** 抽屉表单字段：新建含 key，编辑时 key 只读展示不提交 */
+ interface NamespaceFormValues {
+   namespaceKey: string;
+   namespaceName: string;
+@@ -17,19 +18,29 @@ interface NamespaceFormValues {
+ /** ISO 时间字符串 → 本地可读格式 */
+ const formatTime = (iso: string) => new Date(iso).toLocaleString('zh-CN', { hour12: false });
+ 
+-/** 命名空间管理页：列表 + 新建/编辑弹窗 + 启用禁用切换 + 删除（软删除，二次确认） */
++/** 命名空间管理页：列表（关键字本地过滤）+ 新建/编辑抽屉 + 启用禁用切换 + 删除（软删除，二次确认） */
+ export default function NamespaceList() {
+   const { data, loading, reload } = useTableRequest(listNamespaces);
+-  const [modalOpen, setModalOpen] = useState(false);
++  // 关键字筛选：前端本地过滤名称 / Key
++  const [keyword, setKeyword] = useState('');
++  const [drawerOpen, setDrawerOpen] = useState(false);
+   // 当前编辑的记录，null 表示新建
+   const [editing, setEditing] = useState<NamespaceResponse | null>(null);
+   const [submitting, setSubmitting] = useState(false);
+   const [form] = Form.useForm<NamespaceFormValues>();
+ 
++  const kw = keyword.trim().toLowerCase();
++  const filteredData = (data ?? []).filter(
++    (item) =>
++      !kw ||
++      item.namespaceName.toLowerCase().includes(kw) ||
++      item.namespaceKey.toLowerCase().includes(kw),
++  );
++
+   const openCreate = () => {
+     setEditing(null);
+     form.resetFields();
+-    setModalOpen(true);
++    setDrawerOpen(true);
+   };
+ 
+   const openEdit = (record: NamespaceResponse) => {
+@@ -39,7 +50,7 @@ export default function NamespaceList() {
+       namespaceName: record.namespaceName,
+       description: record.description ?? undefined,
+     });
+-    setModalOpen(true);
++    setDrawerOpen(true);
+   };
+ 
+   // 新建/编辑提交：错误提示由 http.ts 拦截器统一弹出，这里只处理成功分支
+@@ -56,7 +67,7 @@ export default function NamespaceList() {
+         await updateNamespace(editing.id, {
+           namespaceName: values.namespaceName,
+           description: values.description ?? null,
+-          status: editing.status, // 状态由列表行内切换维护，编辑弹窗不改
++          status: editing.status, // 状态由列表行内切换维护，编辑抽屉不改
+         });
+         message.success('更新成功');
+       } else {
+@@ -67,7 +78,7 @@ export default function NamespaceList() {
+         });
+         message.success('创建成功');
+       }
+-      setModalOpen(false);
++      setDrawerOpen(false);
+       reload();
+     } catch {
+       // 接口错误已由拦截器提示
+@@ -150,22 +161,34 @@ export default function NamespaceList() {
+         </Button>
+       }
+     >
++      <Space wrap style={{ marginBottom: 16 }}>
++        <Input.Search
++          allowClear
++          placeholder="搜索名称 / Key"
++          style={{ width: 240 }}
++          onSearch={setKeyword}
++          onChange={(e) => {
++            // 点清空按钮或删空输入时立即还原全量
++            if (!e.target.value) setKeyword('');
++          }}
++        />
++      </Space>
+       <Table<NamespaceResponse>
+         rowKey="id"
+         size="middle"
+         columns={columns}
+-        dataSource={data ?? []}
++        dataSource={filteredData}
+         loading={loading}
+-        pagination={false}
++        pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
+       />
+-      <Modal
++      <FormDrawer
+         title={editing ? '编辑命名空间' : '新建命名空间'}
+-        open={modalOpen}
+-        width={520}
+-        onOk={handleSubmit}
+-        confirmLoading={submitting}
+-        onCancel={() => setModalOpen(false)}
+-        destroyOnClose
++        open={drawerOpen}
++        onClose={() => setDrawerOpen(false)}
++        onSubmit={handleSubmit}
++        loading={submitting}
++        form={form}
++        okText={editing ? '保存' : '创建'}
+       >
+         <Form form={form} layout="vertical">
+           <Form.Item
+@@ -186,7 +209,7 @@ export default function NamespaceList() {
+             <Input.TextArea rows={3} placeholder="可选" />
+           </Form.Item>
+         </Form>
+-      </Modal>
++      </FormDrawer>
+     </PageContainer>
+   );
+ }

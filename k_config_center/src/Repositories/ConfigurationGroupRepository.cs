@@ -7,13 +7,21 @@ namespace k_config_center.Repositories;
 /// <summary>配置组数据访问：本模块所有数据库读写收口于此，对外只出入 ConfigurationGroupData 业务数据</summary>
 public class ConfigurationGroupRepository(ISqlSugarClient database)
 {
-    /// <summary>配置组列表：命名空间/环境过滤均可选（文档端点表两参数并列），按创建时间排序</summary>
+    /// <summary>配置组列表：命名空间/环境过滤均可选（文档端点表两参数并列），按创建时间排序。
+    /// LeftJoin 命名空间/环境表带出冗余 key/名称（联表显式带 deleted_at 条件，不依赖全局过滤器在联表中的行为，关联不到为 null）</summary>
     public async Task<List<ConfigurationGroupData>> ListAsync(long? namespaceId, long? environmentId) =>
         (await database.Queryable<ConfigCenterConfigurationGroup>()
+            .LeftJoin<ConfigCenterNamespace>((it, ns) => it.NamespaceId == ns.Id && ns.DeletedAt == null)
+            .LeftJoin<ConfigCenterEnvironment>((it, ns, env) => it.EnvironmentId == env.Id && env.DeletedAt == null)
             .WhereIF(namespaceId != null, it => it.NamespaceId == namespaceId)
             .WhereIF(environmentId != null, it => it.EnvironmentId == environmentId)
-            .OrderBy(it => it.CreatedAt).ToListAsync())
-        .Select(From).ToList();
+            .OrderBy(it => it.CreatedAt)
+            .Select((it, ns, env) => new { Entity = it, ns.NamespaceKey, ns.NamespaceName, env.EnvironmentKey, env.EnvironmentName }).ToListAsync())
+        .Select(row => From(row.Entity) with
+        {
+            NamespaceKey = row.NamespaceKey, NamespaceName = row.NamespaceName,
+            EnvironmentKey = row.EnvironmentKey, EnvironmentName = row.EnvironmentName
+        }).ToList();
 
     /// <summary>按 id 查单条（已软删返回 null）</summary>
     public async Task<ConfigurationGroupData?> GetByIdAsync(long id)

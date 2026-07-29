@@ -8,20 +8,43 @@ namespace k_config_center.Repositories;
 /// 含发布流程需要的原子操作（版本号自增、生效指针切换），事务边界由 Service 层通过 DatabaseTransactionRunner 编排</summary>
 public class ConfigurationRepository(ISqlSugarClient database)
 {
-    /// <summary>组内配置列表：状态/关键字过滤可选，按创建时间排序</summary>
-    public async Task<List<ConfigurationData>> ListByGroupAsync(long groupId, string? status, string? keyword) =>
+    /// <summary>配置列表：组/命名空间/环境/状态/关键字过滤均可选（实体含 NamespaceId/EnvironmentId 冗余列，单表过滤无需联表），按创建时间排序。
+    /// LeftJoin 命名空间/环境/配置组表带出冗余名称与业务 key（联表显式带 deleted_at 条件，不依赖全局过滤器在联表中的行为，关联不到为 null）</summary>
+    public async Task<List<ConfigurationData>> ListAsync(long? groupId, long? namespaceId, long? environmentId, string? status, string? keyword) =>
         (await database.Queryable<ConfigCenterConfiguration>()
-            .Where(it => it.GroupId == groupId)
+            .LeftJoin<ConfigCenterNamespace>((it, ns) => it.NamespaceId == ns.Id && ns.DeletedAt == null)
+            .LeftJoin<ConfigCenterEnvironment>((it, ns, env) => it.EnvironmentId == env.Id && env.DeletedAt == null)
+            .LeftJoin<ConfigCenterConfigurationGroup>((it, ns, env, grp) => it.GroupId == grp.Id && grp.DeletedAt == null)
+            .WhereIF(groupId != null, it => it.GroupId == groupId)
+            .WhereIF(namespaceId != null, it => it.NamespaceId == namespaceId)
+            .WhereIF(environmentId != null, it => it.EnvironmentId == environmentId)
             .WhereIF(!string.IsNullOrEmpty(status), it => it.Status == status)
             .WhereIF(!string.IsNullOrEmpty(keyword), it => it.ConfigurationKey.Contains(keyword!))
-            .OrderBy(it => it.CreatedAt).ToListAsync())
-        .Select(From).ToList();
+            .OrderBy(it => it.CreatedAt)
+            .Select((it, ns, env, grp) => new
+            { Entity = it, ns.NamespaceName, env.EnvironmentName, grp.GroupName, ns.NamespaceKey, env.EnvironmentKey, grp.GroupKey }).ToListAsync())
+        .Select(row => From(row.Entity) with
+        {
+            NamespaceName = row.NamespaceName, EnvironmentName = row.EnvironmentName, GroupName = row.GroupName,
+            NamespaceKey = row.NamespaceKey, EnvironmentKey = row.EnvironmentKey, GroupKey = row.GroupKey
+        }).ToList();
 
-    /// <summary>按 id 查单条（已软删返回 null）</summary>
+    /// <summary>按 id 查单条（已软删返回 null）：LeftJoin 带出三个维度的冗余名称与业务 key，与列表同口径</summary>
     public async Task<ConfigurationData?> GetByIdAsync(long id)
     {
-        var entity = await database.Queryable<ConfigCenterConfiguration>().InSingleAsync(id);
-        return entity == null ? null : From(entity);
+        var row = await database.Queryable<ConfigCenterConfiguration>()
+            .LeftJoin<ConfigCenterNamespace>((it, ns) => it.NamespaceId == ns.Id && ns.DeletedAt == null)
+            .LeftJoin<ConfigCenterEnvironment>((it, ns, env) => it.EnvironmentId == env.Id && env.DeletedAt == null)
+            .LeftJoin<ConfigCenterConfigurationGroup>((it, ns, env, grp) => it.GroupId == grp.Id && grp.DeletedAt == null)
+            .Where(it => it.Id == id)
+            .Select((it, ns, env, grp) => new
+            { Entity = it, ns.NamespaceName, env.EnvironmentName, grp.GroupName, ns.NamespaceKey, env.EnvironmentKey, grp.GroupKey }).FirstAsync();
+        return row == null ? null
+            : From(row.Entity) with
+            {
+                NamespaceName = row.NamespaceName, EnvironmentName = row.EnvironmentName, GroupName = row.GroupName,
+                NamespaceKey = row.NamespaceKey, EnvironmentKey = row.EnvironmentKey, GroupKey = row.GroupKey
+            };
     }
 
     /// <summary>组内是否存在未删除的配置项：供配置组删除前的级联检查</summary>
