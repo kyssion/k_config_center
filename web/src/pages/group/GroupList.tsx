@@ -37,24 +37,27 @@ interface GroupFormValues {
 /** ISO 时间字符串 → 本地可读格式 */
 const formatTime = (iso: string) => new Date(iso).toLocaleString('zh-CN', { hour12: false });
 
-/** 配置组管理页：命名空间/环境级联筛选（均可不选=全部）+ 关键字本地过滤 + 新建/编辑抽屉 */
+/** 配置组管理页：命名空间/环境级联 + 关键字筛选（点「查询」手动生效）+ 新建/编辑抽屉 */
 export default function GroupList() {
   // 命名空间列表：筛选区下拉 / 抽屉表单共用同一份数据（下拉展开时 reload 取最新）
   const { data: namespaces, reload: reloadNamespaces } = useTableRequest(listNamespaces);
-  // 筛选条件：均为 undefined 时查全部
+  // 筛选草稿：均为 undefined/空时查全部；点「查询」后才生效
   const [filterNamespaceId, setFilterNamespaceId] = useState<number>();
   const [filterEnvironmentId, setFilterEnvironmentId] = useState<number>();
-  // 关键字筛选：前端本地过滤名称 / Key
+  const [keywordInput, setKeywordInput] = useState('');
+  // 已生效的服务端筛选条件：点「查询」时由草稿快照生成（每次都是新对象，条件未变时也会触发刷新）
+  const [applied, setApplied] = useState<{ namespaceId?: number; environmentId?: number }>({});
+  // 关键字筛选（已生效）：前端本地过滤名称 / Key
   const [keyword, setKeyword] = useState('');
 
-  // 筛选区环境选项：选了命名空间则拉该空间下环境，否则全量（下拉展开时 reload 取最新）
+  // 筛选区环境选项：按草稿命名空间拉取（驱动下拉选项，与列表查询无关；下拉展开时 reload 取最新）
   const envFetcher = useCallback(() => listEnvironments(filterNamespaceId), [filterNamespaceId]);
   const { data: environments, reload: reloadEnvironments } = useTableRequest(envFetcher);
 
-  // 筛选条件变化时 fetcher 引用变化，useTableRequest 自动重新加载
+  // 已生效条件变化时 fetcher 引用变化，useTableRequest 自动重新加载
   const fetcher = useCallback(
-    () => listGroups({ namespaceId: filterNamespaceId, environmentId: filterEnvironmentId }),
-    [filterNamespaceId, filterEnvironmentId],
+    () => listGroups({ namespaceId: applied.namespaceId, environmentId: applied.environmentId }),
+    [applied],
   );
   const { data, loading, reload } = useTableRequest(fetcher);
 
@@ -77,6 +80,21 @@ export default function GroupList() {
     (item) =>
       !kw || item.groupName.toLowerCase().includes(kw) || item.groupKey.toLowerCase().includes(kw),
   );
+
+  // 点「查询」/回车：草稿条件生效（命名空间/环境走服务端筛选，关键字为本地过滤）
+  const handleSearch = () => {
+    setApplied({ namespaceId: filterNamespaceId, environmentId: filterEnvironmentId });
+    setKeyword(keywordInput);
+  };
+
+  // 点「重置」：清空草稿与已生效条件，恢复全量
+  const handleResetFilter = () => {
+    setFilterNamespaceId(undefined);
+    setFilterEnvironmentId(undefined);
+    setKeywordInput('');
+    setApplied({});
+    setKeyword('');
+  };
 
   // 表单级联：每次直接按命名空间请求环境列表，保证拿到最新数据
   const loadFormEnvironments = (nsId: number) => {
@@ -274,16 +292,18 @@ export default function GroupList() {
             onChange={(v?: number) => setFilterEnvironmentId(v)}
             onDropdownVisibleChange={(open) => open && reloadEnvironments()}
           />
-          <Input.Search
+          <Input
             allowClear
             placeholder="搜索名称 / Key"
             style={{ width: 240 }}
-            onSearch={setKeyword}
-            onChange={(e) => {
-              // 点清空按钮或删空输入时立即还原全量
-              if (!e.target.value) setKeyword('');
-            }}
+            value={keywordInput}
+            onChange={(e) => setKeywordInput(e.target.value)}
+            onPressEnter={handleSearch}
           />
+          <Button type="primary" onClick={handleSearch}>
+            查询
+          </Button>
+          <Button onClick={handleResetFilter}>重置</Button>
         </Space>
         <ColumnSettingButton columnMetas={columnMetas} setVisible={setVisible} setWidth={setWidth} reset={reset} />
       </div>

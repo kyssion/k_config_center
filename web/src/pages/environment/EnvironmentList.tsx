@@ -37,16 +37,19 @@ interface EnvironmentFormValues {
 /** ISO 时间字符串 → 本地可读格式 */
 const formatTime = (iso: string) => new Date(iso).toLocaleString('zh-CN', { hour12: false });
 
-/** 环境管理页：命名空间筛选（不选=全部）+ 关键字本地过滤 + 新建/编辑抽屉 */
+/** 环境管理页：命名空间 + 关键字筛选（点「查询」手动生效）+ 新建/编辑抽屉 */
 export default function EnvironmentList() {
   // 命名空间列表：筛选区下拉 / 抽屉表单共用同一份数据（下拉展开时 reload 取最新）
   const { data: namespaces, reload: reloadNamespaces } = useTableRequest(listNamespaces);
-  // 命名空间筛选：undefined 表示查全部
+  // 筛选草稿：命名空间 undefined 表示查全部，关键字为输入框受控值；点「查询」后才生效
   const [filterNamespaceId, setFilterNamespaceId] = useState<number>();
-  // 关键字筛选：前端本地过滤名称 / Key
+  const [keywordInput, setKeywordInput] = useState('');
+  // 已生效的服务端筛选条件：点「查询」时由草稿快照生成（每次都是新对象，条件未变时也会触发刷新）
+  const [applied, setApplied] = useState<{ namespaceId?: number }>({});
+  // 关键字筛选（已生效）：前端本地过滤名称 / Key
   const [keyword, setKeyword] = useState('');
-  // 筛选命名空间变化时 fetcher 引用变化，useTableRequest 自动重新加载
-  const fetcher = useCallback(() => listEnvironments(filterNamespaceId), [filterNamespaceId]);
+  // 已生效条件变化时 fetcher 引用变化，useTableRequest 自动重新加载
+  const fetcher = useCallback(() => listEnvironments(applied.namespaceId), [applied]);
   const { data, loading, reload } = useTableRequest(fetcher);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -64,6 +67,20 @@ export default function EnvironmentList() {
       item.environmentName.toLowerCase().includes(kw) ||
       item.environmentKey.toLowerCase().includes(kw),
   );
+
+  // 点「查询」/回车：草稿条件生效（命名空间走服务端筛选，关键字为本地过滤）
+  const handleSearch = () => {
+    setApplied({ namespaceId: filterNamespaceId });
+    setKeyword(keywordInput);
+  };
+
+  // 点「重置」：清空草稿与已生效条件，恢复全量
+  const handleResetFilter = () => {
+    setFilterNamespaceId(undefined);
+    setKeywordInput('');
+    setApplied({});
+    setKeyword('');
+  };
 
   const openCreate = () => {
     setEditing(null);
@@ -235,16 +252,18 @@ export default function EnvironmentList() {
             onChange={(v?: number) => setFilterNamespaceId(v)}
             onDropdownVisibleChange={(open) => open && reloadNamespaces()}
           />
-          <Input.Search
+          <Input
             allowClear
             placeholder="搜索名称 / Key"
             style={{ width: 240 }}
-            onSearch={setKeyword}
-            onChange={(e) => {
-              // 点清空按钮或删空输入时立即还原全量
-              if (!e.target.value) setKeyword('');
-            }}
+            value={keywordInput}
+            onChange={(e) => setKeywordInput(e.target.value)}
+            onPressEnter={handleSearch}
           />
+          <Button type="primary" onClick={handleSearch}>
+            查询
+          </Button>
+          <Button onClick={handleResetFilter}>重置</Button>
         </Space>
         <ColumnSettingButton columnMetas={columnMetas} setVisible={setVisible} setWidth={setWidth} reset={reset} />
       </div>

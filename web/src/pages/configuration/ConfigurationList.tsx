@@ -80,20 +80,26 @@ interface CreateFormValues {
 }
 
 /**
- * 配置项列表页：命名空间/环境/配置组三级级联 + 状态 + Key 关键字组合筛选（全可选，默认全量）；
+ * 配置项列表页：命名空间/环境/配置组三级级联 + 状态 + Key 关键字组合筛选（全可选，点「查询」手动生效）；
  * 行操作：编辑 / 发布 / 下线 / 删除 / 版本历史；支持新建配置。
  */
 export default function ConfigurationList() {
   const navigate = useNavigate();
 
-  // 筛选条件：命名空间 → 环境 → 配置组三级级联，均可为空（空 = 不过滤）
+  // 筛选草稿：命名空间 → 环境 → 配置组三级级联 + 状态 + 关键字，均可为空；点「查询」后才生效
   const [namespaceId, setNamespaceId] = useState<number | undefined>(undefined);
   const [environmentId, setEnvironmentId] = useState<number | undefined>(undefined);
   const [groupId, setGroupId] = useState<number | undefined>(undefined);
   const [status, setStatus] = useState<ConfigStatus | undefined>(undefined);
-  // keyword 拆两个 state：输入框受控值 + 点搜索/回车后生效的查询值（非输入即查）
   const [keywordInput, setKeywordInput] = useState('');
-  const [keyword, setKeyword] = useState('');
+  // 已生效的查询条件：点「查询」时由草稿快照生成（每次都是新对象，条件未变时也会触发刷新）
+  const [applied, setApplied] = useState<{
+    namespaceId?: number;
+    environmentId?: number;
+    groupId?: number;
+    status?: ConfigStatus;
+    keyword?: string;
+  }>({});
 
   // 级联下拉数据源
   const [namespaces, setNamespaces] = useState<NamespaceResponse[]>([]);
@@ -167,19 +173,34 @@ export default function ConfigurationList() {
     refreshGroups();
   }, [refreshGroups]);
 
-  // 任一筛选条件变化即重载（useTableRequest 依赖 fetcher 引用，已防竞态）
+  // 点「查询」时已生效条件变化即重载（useTableRequest 依赖 fetcher 引用，已防竞态）
   const fetcher = useCallback(
     () =>
       listConfigurations({
-        namespaceId,
-        environmentId,
-        groupId,
-        status,
-        keyword: keyword || undefined,
+        namespaceId: applied.namespaceId,
+        environmentId: applied.environmentId,
+        groupId: applied.groupId,
+        status: applied.status,
+        keyword: applied.keyword || undefined,
       }),
-    [namespaceId, environmentId, groupId, status, keyword],
+    [applied],
   );
   const { data, loading, reload } = useTableRequest(fetcher);
+
+  // 点「查询」/回车：草稿条件快照生效，触发列表重新加载
+  const handleSearch = () => {
+    setApplied({ namespaceId, environmentId, groupId, status, keyword: keywordInput.trim() });
+  };
+
+  // 点「重置」：清空草稿与已生效条件，恢复全量
+  const handleResetFilter = () => {
+    setNamespaceId(undefined);
+    setEnvironmentId(undefined);
+    setGroupId(undefined);
+    setStatus(undefined);
+    setKeywordInput('');
+    setApplied({});
+  };
 
   /** 发布确认：填变更备注后调用发布接口 */
   const handlePublish = async () => {
@@ -473,7 +494,7 @@ export default function ConfigurationList() {
         </Button>
       }
     >
-      {/* 筛选区：命名空间 → 环境 → 配置组三级级联 + 状态 + Key 关键字；右侧列配置入口 */}
+      {/* 筛选区：命名空间 → 环境 → 配置组三级级联 + 状态 + Key 关键字，点「查询」生效；右侧列配置入口 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12 }}>
         <Space wrap>
           <Select
@@ -529,19 +550,18 @@ export default function ConfigurationList() {
             options={statusOptions}
             onChange={(v) => setStatus(v)}
           />
-          <Input.Search
+          <Input
             style={{ width: 240 }}
             placeholder="按配置 Key 搜索"
             allowClear
             value={keywordInput}
-            onChange={(e) => {
-              const value = e.target.value;
-              setKeywordInput(value);
-              // allowClear 清空只触发 onChange，此处同步重置生效查询值；非空时仍为提交式搜索
-              if (!value.trim()) setKeyword('');
-            }}
-            onSearch={(value) => setKeyword(value.trim())}
+            onChange={(e) => setKeywordInput(e.target.value)}
+            onPressEnter={handleSearch}
           />
+          <Button type="primary" onClick={handleSearch}>
+            查询
+          </Button>
+          <Button onClick={handleResetFilter}>重置</Button>
         </Space>
         <ColumnSettingButton columnMetas={columnMetas} setVisible={setVisible} setWidth={setWidth} reset={reset} />
       </div>
