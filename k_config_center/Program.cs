@@ -87,7 +87,7 @@ public class Program
                 // 非业务异常：先记结构化日志（含异常栈）便于排查，再返回统一 500 响应，不把内部细节透给客户端
                 app.Logger.LogError(exception, "未处理异常：{Method} {Path}", context.Request.Method, context.Request.Path);
                 context.Response.StatusCode = StatusCodes.Status500InternalServerError;
-                await context.Response.WriteAsJsonAsync(ApiResponse.Fail(10000, "服务器内部错误"));
+                await context.Response.WriteAsJsonAsync(ApiResponse.Fail(ErrorCode.InternalServerError, "服务器内部错误"));
             }
         });
 

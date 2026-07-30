@@ -4,5 +4,7 @@ namespace k_config_center.Infrastructure;
 /// 统一转为 { code, message, data: null } 响应（HTTP 仍返 200，错误由 code 表达）</summary>
 public class BusinessException(int code, string message) : Exception(message)
 {
+    public BusinessException(ErrorCode code, string message) : this((int)code, message) { }
+
     public int Code { get; } = code;
 }

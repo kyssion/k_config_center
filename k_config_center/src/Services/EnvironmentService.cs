@@ -29,7 +29,7 @@ public class EnvironmentService(
             CreatedAt: DateTimeOffset.UtcNow, UpdatedAt: DateTimeOffset.UtcNow);
         try { data = await environmentRepository.InsertAsync(data); }
         catch (Exception exception) when (OperationHelper.IsUniqueViolation(exception))
-        { throw new BusinessException(20002, $"环境 key 在命名空间内已存在：{request.EnvironmentKey}"); }
+        { throw new BusinessException(ErrorCode.EnvironmentKeyConflict, $"环境 key 在命名空间内已存在：{request.EnvironmentKey}"); }
         await WriteLogAsync("CREATE", new { resource = "environment", request.EnvironmentKey },
             namespaceId: data.NamespaceId, environmentId: data.Id);
         return EnvironmentResponse.From(data);
@@ -40,7 +40,7 @@ public class EnvironmentService(
     public async Task UpdateAsync(long id, EnvironmentUpdateRequest request)
     {
         if (await environmentRepository.GetByIdAsync(id) == null)
-            throw new BusinessException(10002, "环境不存在");
+            throw new BusinessException(ErrorCode.ResourceNotFound, "环境不存在");
         await environmentRepository.UpdateAsync(id, request.EnvironmentName, request.Description, request.SortOrder, request.Status);
         await WriteLogAsync("UPDATE", new { resource = "environment", request.EnvironmentName }, environmentId: id);
     }
@@ -49,9 +49,9 @@ public class EnvironmentService(
     public async Task DeleteAsync(long id)
     {
         var existing = await environmentRepository.GetByIdAsync(id)
-            ?? throw new BusinessException(10002, "环境不存在");
+            ?? throw new BusinessException(ErrorCode.ResourceNotFound, "环境不存在");
         if (await configurationGroupRepository.ExistsByEnvironmentIdAsync(id))
-            throw new BusinessException(20004, "存在未删除的下级配置组，拒绝删除");
+            throw new BusinessException(ErrorCode.CascadeDeleteConflict, "存在未删除的下级配置组，拒绝删除");
         await environmentRepository.SoftDeleteAsync(id);
         await WriteLogAsync("DELETE", new { resource = "environment", id },
             namespaceId: existing.NamespaceId, environmentId: id);

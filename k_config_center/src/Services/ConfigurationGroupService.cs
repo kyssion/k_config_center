@@ -31,7 +31,7 @@ public class ConfigurationGroupService(
             CreatedAt: DateTimeOffset.UtcNow, UpdatedAt: DateTimeOffset.UtcNow);
         try { data = await configurationGroupRepository.InsertAsync(data); }
         catch (Exception exception) when (OperationHelper.IsUniqueViolation(exception))
-        { throw new BusinessException(20003, $"配置组 key 在环境内已存在：{request.GroupKey}"); }
+        { throw new BusinessException(ErrorCode.GroupKeyConflict, $"配置组 key 在环境内已存在：{request.GroupKey}"); }
         await WriteLogAsync("CREATE", new { resource = "group", request.GroupKey },
             namespaceId: data.NamespaceId, environmentId: data.EnvironmentId, groupId: data.Id);
         return ConfigurationGroupResponse.From(data);
@@ -42,7 +42,7 @@ public class ConfigurationGroupService(
     public async Task UpdateAsync(long id, ConfigurationGroupUpdateRequest request)
     {
         if (await configurationGroupRepository.GetByIdAsync(id) == null)
-            throw new BusinessException(10002, "配置组不存在");
+            throw new BusinessException(ErrorCode.ResourceNotFound, "配置组不存在");
         await configurationGroupRepository.UpdateAsync(id, request.GroupName, request.Description, request.Status, OperationHelper.GetOperator(Request));
         await WriteLogAsync("UPDATE", new { resource = "group", request.GroupName }, groupId: id);
     }
@@ -51,9 +51,9 @@ public class ConfigurationGroupService(
     public async Task DeleteAsync(long id)
     {
         var existing = await configurationGroupRepository.GetByIdAsync(id)
-            ?? throw new BusinessException(10002, "配置组不存在");
+            ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置组不存在");
         if (await configurationRepository.ExistsByGroupIdAsync(id))
-            throw new BusinessException(20004, "存在未删除的配置项，拒绝删除");
+            throw new BusinessException(ErrorCode.CascadeDeleteConflict, "存在未删除的配置项，拒绝删除");
         await configurationGroupRepository.SoftDeleteAsync(id);
         await WriteLogAsync("DELETE", new { resource = "group", id },
             namespaceId: existing.NamespaceId, environmentId: existing.EnvironmentId, groupId: id);

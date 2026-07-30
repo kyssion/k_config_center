@@ -24,7 +24,7 @@ public class HealthController(NamespaceRepository namespaceRepository, ILogger<H
         catch (Exception exception)
         {
             logger.LogError(exception, "健康检查：数据库连接失败");
-            return Ok(ApiResponse.Fail(10000, "数据库连接失败"));
+            return Ok(ApiResponse.Fail(ErrorCode.InternalServerError, "数据库连接失败"));
         }
     }
 }

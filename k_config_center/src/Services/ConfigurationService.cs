@@ -35,7 +35,7 @@ public class ConfigurationService(
     public async Task<ConfigurationDetailResponse> GetAsync(long id)
     {
         var configuration = await configurationRepository.GetByIdAsync(id)
-            ?? throw new BusinessException(10002, "配置不存在");
+            ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置不存在");
         var publishedVersion = configuration.PublishedVersionId == null ? null
             : await configurationVersionRepository.GetByIdAsync(configuration.PublishedVersionId.Value);
         return new ConfigurationDetailResponse(
@@ -49,7 +49,7 @@ public class ConfigurationService(
     public async Task<ConfigurationResponse> CreateAsync(ConfigurationCreateRequest request)
     {
         var group = await configurationGroupRepository.GetByIdAsync(request.GroupId)
-            ?? throw new BusinessException(10002, "配置组不存在");
+            ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置组不存在");
         var data = new ConfigurationData(0, group.Id, group.NamespaceId, group.EnvironmentId, request.ConfigurationKey,
             request.Content, request.Format, OperationHelper.ComputeMd5(request.Content), request.Description, request.Tags,
             Status: "DRAFT", PublishedVersionId: null, LatestVersionNumber: 0, PublishedAt: null,
@@ -57,7 +57,7 @@ public class ConfigurationService(
             CreatedAt: DateTimeOffset.UtcNow, UpdatedAt: DateTimeOffset.UtcNow);
         try { data = await configurationRepository.InsertAsync(data); }
         catch (Exception exception) when (OperationHelper.IsUniqueViolation(exception))
-        { throw new BusinessException(30001, $"配置 key 在组内已存在：{request.ConfigurationKey}"); }
+        { throw new BusinessException(ErrorCode.ConfigurationKeyConflict, $"配置 key 在组内已存在：{request.ConfigurationKey}"); }
         await WriteLogAsync("CREATE", new { resource = "configuration", request.ConfigurationKey },
             data.NamespaceId, data.EnvironmentId, data.GroupId, data.Id);
         return ConfigurationResponse.From(data, hasUnpublishedChange: true); // 新建即未发布，必有未发布变更
@@ -68,7 +68,7 @@ public class ConfigurationService(
     public async Task UpdateAsync(long id, ConfigurationUpdateRequest request)
     {
         var existing = await configurationRepository.GetByIdAsync(id)
-            ?? throw new BusinessException(10002, "配置不存在");
+            ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置不存在");
         var md5 = OperationHelper.ComputeMd5(request.Content);
         await configurationRepository.UpdateDraftAsync(id, request.Content, request.Format, md5,
             request.Description, request.Tags, OperationHelper.GetOperator(Request));
@@ -80,7 +80,7 @@ public class ConfigurationService(
     public async Task DeleteAsync(long id)
     {
         var existing = await configurationRepository.GetByIdAsync(id)
-            ?? throw new BusinessException(10002, "配置不存在");
+            ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置不存在");
         await configurationRepository.SoftDeleteAsync(id);
         await WriteLogAsync("DELETE", new { resource = "configuration", existing.ConfigurationKey },
             existing.NamespaceId, existing.EnvironmentId, existing.GroupId, id);
@@ -97,7 +97,7 @@ public class ConfigurationService(
     public async Task<ConfigurationVersionResponse> GetVersionAsync(long id, long versionNumber)
     {
         var version = await configurationVersionRepository.GetByVersionNumberAsync(id, versionNumber)
-            ?? throw new BusinessException(10002, $"版本不存在：v{versionNumber}");
+            ?? throw new BusinessException(ErrorCode.ResourceNotFound, $"版本不存在：v{versionNumber}");
         return ConfigurationVersionResponse.From(version);
     }
 

@@ -31,7 +31,7 @@ public class NamespaceService(
             CreatedAt: DateTimeOffset.UtcNow, UpdatedAt: DateTimeOffset.UtcNow);
         try { data = await namespaceRepository.InsertAsync(data); }
         catch (Exception exception) when (OperationHelper.IsUniqueViolation(exception))
-        { throw new BusinessException(20001, $"命名空间 key 已存在：{request.NamespaceKey}"); }
+        { throw new BusinessException(ErrorCode.NamespaceKeyConflict, $"命名空间 key 已存在：{request.NamespaceKey}"); }
         await WriteLogAsync("CREATE", new { resource = "namespace", request.NamespaceKey }, namespaceId: data.Id);
         return NamespaceResponse.From(data);
     }
@@ -41,7 +41,7 @@ public class NamespaceService(
     public async Task UpdateAsync(long id, NamespaceUpdateRequest request)
     {
         if (await namespaceRepository.GetByIdAsync(id) == null)
-            throw new BusinessException(10002, "命名空间不存在");
+            throw new BusinessException(ErrorCode.ResourceNotFound, "命名空间不存在");
         await namespaceRepository.UpdateAsync(id, request.NamespaceName, request.Description, request.Status, OperationHelper.GetOperator(Request));
         await WriteLogAsync("UPDATE", new { resource = "namespace", request.NamespaceName }, namespaceId: id);
     }
@@ -50,9 +50,9 @@ public class NamespaceService(
     public async Task DeleteAsync(long id)
     {
         if (await namespaceRepository.GetByIdAsync(id) == null)
-            throw new BusinessException(10002, "命名空间不存在");
+            throw new BusinessException(ErrorCode.ResourceNotFound, "命名空间不存在");
         if (await environmentRepository.ExistsByNamespaceIdAsync(id))
-            throw new BusinessException(20004, "存在未删除的下级环境，拒绝删除");
+            throw new BusinessException(ErrorCode.CascadeDeleteConflict, "存在未删除的下级环境，拒绝删除");
         await namespaceRepository.SoftDeleteAsync(id);
         await WriteLogAsync("DELETE", new { resource = "namespace", id }, namespaceId: id);
     }

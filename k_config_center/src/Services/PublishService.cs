@@ -27,13 +27,13 @@ public class PublishService(
     public async Task<PublishResponse> PublishAsync(long id, PublishRequest request)
     {
         var configuration = await configurationRepository.GetByIdAsync(id)
-            ?? throw new BusinessException(10002, "配置不存在");
+            ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置不存在");
         if (configuration.Status == "PUBLISHED" && configuration.PublishedVersionId != null)
         {
             // 「无未发布变更」判定：当前 md5 与生效版本 md5 一致，重复发布只会产生完全相同的版本，拒绝
             var publishedVersion = await configurationVersionRepository.GetByIdAsync(configuration.PublishedVersionId.Value);
             if (publishedVersion?.Md5 == configuration.Md5)
-                throw new BusinessException(30002, "无未发布变更，无需重复发布");
+                throw new BusinessException(ErrorCode.NoUnpublishedChanges, "无未发布变更，无需重复发布");
         }
 
         PublishResponse response = null!;
@@ -58,9 +58,9 @@ public class PublishService(
     public async Task<PublishResponse> RollbackAsync(long id, RollbackRequest request)
     {
         var configuration = await configurationRepository.GetByIdAsync(id)
-            ?? throw new BusinessException(10002, "配置不存在");
+            ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置不存在");
         var target = await configurationVersionRepository.GetByVersionNumberAsync(id, request.VersionNumber)
-            ?? throw new BusinessException(30003, $"目标回滚版本不存在：v{request.VersionNumber}");
+            ?? throw new BusinessException(ErrorCode.RollbackVersionNotFound, $"目标回滚版本不存在：v{request.VersionNumber}");
 
         PublishResponse response = null!;
         await ExecutePublishTransactionAsync(async () =>
@@ -84,9 +84,9 @@ public class PublishService(
     public async Task OfflineAsync(long id)
     {
         var configuration = await configurationRepository.GetByIdAsync(id)
-            ?? throw new BusinessException(10002, "配置不存在");
+            ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置不存在");
         if (configuration.Status != "PUBLISHED")
-            throw new BusinessException(10001, "仅已发布状态的配置可下线");
+            throw new BusinessException(ErrorCode.InvalidBusinessState, "仅已发布状态的配置可下线");
         await configurationRepository.UpdateOfflineStateAsync(id, OperationHelper.GetOperator(Request));
         await WriteLogAsync("OFFLINE", new { resource = "configuration", configuration.ConfigurationKey }, configuration, id);
     }
@@ -95,7 +95,7 @@ public class PublishService(
     /// 各自拿到不同版本号，避免「先读后写」竞态；行不存在或已软删则视为配置不存在</summary>
     private async Task<long> IncrementVersionNumberAsync(long id) =>
         await configurationRepository.IncrementLatestVersionNumberAsync(id)
-        ?? throw new BusinessException(10002, "配置不存在或已被删除");
+        ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置不存在或已被删除");
 
     /// <summary>发布/回滚事务统一执行：业务异常原样抛出；UNIQUE(configuration_id, version_number) 冲突
     /// 转发布并发冲突（30004，唯一约束兜底，后端方案第 9 章）；其余异常原样抛给全局处理</summary>
@@ -104,7 +104,7 @@ public class PublishService(
         try { await transactionRunner.ExecuteAsync(action); }
         catch (BusinessException) { throw; }
         catch (Exception exception) when (OperationHelper.IsUniqueViolation(exception))
-        { throw new BusinessException(30004, "发布并发冲突，请重试"); }
+        { throw new BusinessException(ErrorCode.PublishConcurrencyConflict, "发布并发冲突，请重试"); }
     }
 
     /// <summary>写审计日志：归属维度取自配置的冗余 id，操作人/客户端 IP 从当前请求提取</summary>

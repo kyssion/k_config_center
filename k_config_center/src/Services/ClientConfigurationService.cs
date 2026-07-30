@@ -21,7 +21,7 @@ public class ClientConfigurationService(ConfigurationRepository configurationRep
         string configurationKey, string namespaceKey, string environmentKey, string groupKey)
     {
         var items = await ListAsync(namespaceKey, environmentKey, groupKey, configurationKey);
-        return items.FirstOrDefault() ?? throw new BusinessException(10002, $"已发布配置不存在：{configurationKey}");
+        return items.FirstOrDefault() ?? throw new BusinessException(ErrorCode.ResourceNotFound, $"已发布配置不存在：{configurationKey}");
     }
 
     /// <summary>长轮询变更探测（阶段一简单轮询式实现，后端方案 7.3 明确允许）：
