@@ -39,10 +39,12 @@ public class EnvironmentService(
     /// 先经带软删过滤器的查询确认存在（Updateable 不走全局过滤器）</summary>
     public async Task UpdateAsync(long id, EnvironmentUpdateRequest request)
     {
-        if (await environmentRepository.GetByIdAsync(id) == null)
-            throw new BusinessException(ErrorCode.ResourceNotFound, "环境不存在");
+        var existing = await environmentRepository.GetByIdAsync(id)
+            ?? throw new BusinessException(ErrorCode.ResourceNotFound, "环境不存在");
         await environmentRepository.UpdateAsync(id, request.EnvironmentName, request.Description, request.SortOrder, request.Status);
-        await WriteLogAsync("UPDATE", new { resource = "environment", request.EnvironmentName }, environmentId: id);
+        // 审计日志维度带全：上级命名空间 id 从既有记录取，避免日志只挂环境导致审计页缺失命名空间信息
+        await WriteLogAsync("UPDATE", new { resource = "environment", request.EnvironmentName },
+            namespaceId: existing.NamespaceId, environmentId: id);
     }
 
     /// <summary>软删除环境：存在未删除的下级配置组时拒绝（20004）</summary>

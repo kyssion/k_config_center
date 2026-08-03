@@ -41,10 +41,12 @@ public class ConfigurationGroupService(
     /// 先经带软删过滤器的查询确认存在（Updateable 不走全局过滤器）</summary>
     public async Task UpdateAsync(long id, ConfigurationGroupUpdateRequest request)
     {
-        if (await configurationGroupRepository.GetByIdAsync(id) == null)
-            throw new BusinessException(ErrorCode.ResourceNotFound, "配置组不存在");
+        var existing = await configurationGroupRepository.GetByIdAsync(id)
+            ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置组不存在");
         await configurationGroupRepository.UpdateAsync(id, request.GroupName, request.Description, request.Status, OperationHelper.GetOperator(Request));
-        await WriteLogAsync("UPDATE", new { resource = "group", request.GroupName }, groupId: id);
+        // 审计日志维度带全：上级命名空间/环境 id 从既有记录取，避免日志只挂配置组导致审计页缺失上级维度信息
+        await WriteLogAsync("UPDATE", new { resource = "group", request.GroupName },
+            namespaceId: existing.NamespaceId, environmentId: existing.EnvironmentId, groupId: id);
     }
 
     /// <summary>软删除配置组：存在未删除的配置项时拒绝（20004）</summary>

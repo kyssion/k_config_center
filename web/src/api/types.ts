@@ -229,11 +229,7 @@ export interface OperationLogResponse {
 
 /** 操作日志查询参数：各条件均可选，时间为 ISO 8601 字符串，区间 [startTime, endTime) */
 export interface OperationLogQuery {
-  namespaceId?: number;
-  environmentId?: number;
-  groupId?: number;
-  configurationId?: number;
-  operation?: string;
+  operator?: string;
   startTime?: string;
   endTime?: string;
   pageIndex?: number;

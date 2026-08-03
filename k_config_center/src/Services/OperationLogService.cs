@@ -7,13 +7,13 @@ namespace k_config_center.Services;
 /// 日志只读、不设软删除，不提供任何修改/删除能力；写入由各业务 Service 调 OperationLogRepository 完成</summary>
 public class OperationLogService(OperationLogRepository operationLogRepository)
 {
-    /// <summary>日志分页检索：各过滤条件均可选，时间区间为闭开区间 [startTime, endTime)</summary>
+    /// <summary>日志分页检索：各过滤条件均可选（操作人为模糊匹配），时间区间为闭开区间 [startTime, endTime)</summary>
     public async Task<PageResponse<OperationLogResponse>> ListAsync(
         long? namespaceId, long? environmentId, long? groupId, long? configurationId,
-        string? operation, DateTimeOffset? startTime, DateTimeOffset? endTime, int pageIndex, int pageSize)
+        string? operation, string? operatorName, DateTimeOffset? startTime, DateTimeOffset? endTime, int pageIndex, int pageSize)
     {
         var (items, total) = await operationLogRepository.ListPageAsync(
-            namespaceId, environmentId, groupId, configurationId, operation, startTime, endTime, pageIndex, pageSize);
+            namespaceId, environmentId, groupId, configurationId, operation, operatorName, startTime, endTime, pageIndex, pageSize);
         return new PageResponse<OperationLogResponse>(items.Select(OperationLogResponse.From).ToList(), total);
     }
 }

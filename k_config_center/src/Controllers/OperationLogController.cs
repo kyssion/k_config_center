@@ -16,6 +16,7 @@ public class OperationLogController(OperationLogService operationLogService) : C
     /// <param name="groupId">按配置组过滤（可选）</param>
     /// <param name="configurationId">按配置项过滤（可选）</param>
     /// <param name="operation">按操作类型过滤（可选）：CREATE / UPDATE / PUBLISH / ROLLBACK / OFFLINE / DELETE</param>
+    /// <param name="operator">按操作人过滤（可选，模糊匹配）</param>
     /// <param name="startTime">起始时间（含，可选）</param>
     /// <param name="endTime">结束时间（不含，可选）</param>
     /// <param name="pageIndex">页码，从 1 开始</param>
@@ -23,7 +24,7 @@ public class OperationLogController(OperationLogService operationLogService) : C
     /// <returns>data 为分页结构 { items: OperationLogResponse[], total }</returns>
     [HttpGet]
     public async Task<object> List(long? namespaceId, long? environmentId, long? groupId, long? configurationId,
-        string? operation, DateTimeOffset? startTime, DateTimeOffset? endTime, int pageIndex = 1, int pageSize = 20) =>
+        string? operation, string? @operator, DateTimeOffset? startTime, DateTimeOffset? endTime, int pageIndex = 1, int pageSize = 20) =>
         ApiResponse.Ok(await operationLogService.ListAsync(
-            namespaceId, environmentId, groupId, configurationId, operation, startTime, endTime, pageIndex, pageSize));
+            namespaceId, environmentId, groupId, configurationId, operation, @operator, startTime, endTime, pageIndex, pageSize));
 }

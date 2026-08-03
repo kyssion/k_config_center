@@ -14,7 +14,7 @@ export default defineConfig({
     proxy: {
       // /api 前缀请求代理到后端，浏览器侧同源，无跨域问题
       '/api': {
-        target: 'http://localhost:9000', // 后端 dotnet run 监听地址（launchSettings.json）
+        target: 'http://localhost:9002', // 后端 dotnet run 监听地址（launchSettings.json）
         changeOrigin: true,
       },
     },

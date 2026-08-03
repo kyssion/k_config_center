@@ -1,32 +1,19 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Button, DatePicker, Form, InputNumber, Select, Space, Table, Tag } from 'antd';
+import { useCallback, useState } from 'react';
+import { Button, DatePicker, Form, Input, Space, Table, Tag } from 'antd';
 import { AuditOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { Dayjs } from 'dayjs';
 import { listOperationLogs } from '@/api/operationLog';
-import { listNamespaces } from '@/api/namespace';
-import { listEnvironments } from '@/api/environment';
-import { listGroups } from '@/api/group';
-import type {
-  ConfigurationGroupResponse,
-  EnvironmentResponse,
-  NamespaceResponse,
-  OperationLogQuery,
-  OperationLogResponse,
-} from '@/api/types';
+import type { OperationLogQuery, OperationLogResponse } from '@/api/types';
 import { useTableRequest } from '@/hooks/useTableRequest';
 import { useColumnSettings } from '@/hooks/useColumnSettings';
 import PageContainer from '@/components/PageContainer';
 import ColumnSettingButton from '@/components/ColumnSettingButton';
 import DimensionCell from '@/components/DimensionCell';
 
-/** 检索表单字段：时间范围为 Dayjs 区间，提交时转 ISO 字符串 */
+/** 检索表单字段：仅保留操作人与时间范围，时间范围为 Dayjs 区间，提交时转 ISO 字符串 */
 interface LogSearchValues {
-  namespaceId?: number;
-  environmentId?: number;
-  groupId?: number;
-  configurationId?: number;
-  operation?: string;
+  operator?: string;
   timeRange?: [Dayjs | null, Dayjs | null] | null;
 }
 
@@ -39,11 +26,6 @@ const operationMeta: Record<string, { label: string; color: string }> = {
   ROLLBACK: { label: '回滚', color: 'purple' },
   OFFLINE: { label: '下线', color: 'default' },
 };
-
-const operationOptions = Object.entries(operationMeta).map(([value, meta]) => ({
-  value,
-  label: meta.label,
-}));
 
 /** ISO 时间字符串 → 本地可读格式 */
 const formatTime = (iso: string) => new Date(iso).toLocaleString('zh-CN', { hour12: false });
@@ -65,7 +47,7 @@ const formatDetail = (detail: string) => {
   }
 };
 
-/** 操作审计页：多维度检索表单 + 分页日志表格 + detail JSON 展开查看 */
+/** 操作审计页：操作人/时间范围检索表单 + 分页日志表格 + detail JSON 展开查看 */
 export default function OperationLogList() {
   const [form] = Form.useForm<LogSearchValues>();
 
@@ -75,51 +57,14 @@ export default function OperationLogList() {
     pageSize: 10,
   }));
 
-  // 级联选择器数据源
-  const [namespaces, setNamespaces] = useState<NamespaceResponse[]>([]);
-  const [environments, setEnvironments] = useState<EnvironmentResponse[]>([]);
-  const [groups, setGroups] = useState<ConfigurationGroupResponse[]>([]);
-  // 表单当前选中的命名空间/环境（驱动下级选择器选项）
-  const watchNamespaceId = Form.useWatch('namespaceId', form);
-  const watchEnvironmentId = Form.useWatch('environmentId', form);
-
   const fetcher = useCallback(() => listOperationLogs(query), [query]);
   const { data, loading } = useTableRequest(fetcher);
-
-  // 命名空间选择器数据源（一次性加载）
-  useEffect(() => {
-    listNamespaces().then(setNamespaces).catch(() => undefined);
-  }, []);
-
-  // 表单命名空间变化时联动加载环境选项
-  useEffect(() => {
-    if (!watchNamespaceId) {
-      setEnvironments([]);
-      return;
-    }
-    listEnvironments(watchNamespaceId).then(setEnvironments).catch(() => undefined);
-  }, [watchNamespaceId]);
-
-  // 表单命名空间/环境变化时联动加载配置组选项（后端两个过滤条件均可选）
-  useEffect(() => {
-    if (!watchNamespaceId && !watchEnvironmentId) {
-      setGroups([]);
-      return;
-    }
-    listGroups({ namespaceId: watchNamespaceId, environmentId: watchEnvironmentId })
-      .then(setGroups)
-      .catch(() => undefined);
-  }, [watchNamespaceId, watchEnvironmentId]);
 
   // 点「查询」：以表单值重建查询参数并回到第一页；时间区间转 ISO 字符串（[startTime, endTime)）
   const handleSearch = (values: LogSearchValues) => {
     const [start, end] = values.timeRange ?? [null, null];
     setQuery({
-      namespaceId: values.namespaceId,
-      environmentId: values.environmentId,
-      groupId: values.groupId,
-      configurationId: values.configurationId,
-      operation: values.operation,
+      operator: values.operator?.trim() || undefined,
       startTime: start ? start.toISOString() : undefined,
       endTime: end ? end.toISOString() : undefined,
       pageIndex: 1,
@@ -204,57 +149,8 @@ export default function OperationLogList() {
       {/* 筛选区：卡片内顶部一行，右侧列配置按钮，与表格之间留 16px 间距 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 16 }}>
         <Form form={form} layout="inline" onFinish={handleSearch} style={{ rowGap: 12, flex: 1 }}>
-          <Form.Item name="namespaceId" label="命名空间">
-            <Select
-              style={{ width: 160 }}
-              placeholder="全部"
-              allowClear
-              options={namespaces.map((n) => ({ value: n.id, label: n.namespaceName }))}
-              onChange={() => form.setFieldsValue({ environmentId: undefined, groupId: undefined })}
-              onDropdownVisibleChange={(open) => {
-                // 展开即重新拉取命名空间列表，取最新数据
-                if (open) listNamespaces().then(setNamespaces).catch(() => undefined);
-              }}
-            />
-          </Form.Item>
-          <Form.Item name="environmentId" label="环境">
-            <Select
-              style={{ width: 140 }}
-              placeholder="全部"
-              allowClear
-              disabled={!watchNamespaceId}
-              options={environments.map((e) => ({ value: e.id, label: e.environmentName }))}
-              onChange={() => form.setFieldsValue({ groupId: undefined })}
-              onDropdownVisibleChange={(open) => {
-                // 展开即按当前命名空间重新拉取环境列表
-                if (open && watchNamespaceId) {
-                  listEnvironments(watchNamespaceId).then(setEnvironments).catch(() => undefined);
-                }
-              }}
-            />
-          </Form.Item>
-          <Form.Item name="groupId" label="配置组">
-            <Select
-              style={{ width: 160 }}
-              placeholder="全部"
-              allowClear
-              disabled={!watchNamespaceId && !watchEnvironmentId}
-              options={groups.map((g) => ({ value: g.id, label: g.groupName }))}
-              onDropdownVisibleChange={(open) => {
-                // 展开即按当前命名空间/环境重新拉取配置组列表
-                if (open && (watchNamespaceId || watchEnvironmentId)) {
-                  listGroups({ namespaceId: watchNamespaceId, environmentId: watchEnvironmentId })
-                    .then(setGroups)
-                    .catch(() => undefined);
-                }
-              }}
-            />
-          </Form.Item>
-          <Form.Item name="configurationId" label="配置项 ID">
-            <InputNumber style={{ width: 120 }} placeholder="全部" min={1} />
-          </Form.Item>
-          <Form.Item name="operation" label="操作类型">
-            <Select style={{ width: 120 }} placeholder="全部" allowClear options={operationOptions} />
+          <Form.Item name="operator" label="操作人">
+            <Input style={{ width: 160 }} placeholder="全部（模糊匹配）" allowClear />
           </Form.Item>
           <Form.Item name="timeRange" label="时间范围">
             <DatePicker.RangePicker showTime allowClear />
