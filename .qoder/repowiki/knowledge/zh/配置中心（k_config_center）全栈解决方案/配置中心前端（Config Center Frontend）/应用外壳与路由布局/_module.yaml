@@ -1,0 +1,12 @@
+schema_version: 1
+module_path: config_center_frontend/app_shell
+title: 应用外壳与路由布局
+scope:
+    - web/src/layouts/
+    - web/src/router/
+    - web/src/App.tsx
+    - web/src/main.tsx
+source_files: []
+depends_on: []
+related_to:
+    - path: config_center_frontend/shared_ui

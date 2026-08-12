@@ -1,0 +1,12 @@
+schema_version: 1
+module_path: ""
+title: 配置中心（k_config_center）全栈解决方案
+scope:
+    - k_config_center.sln
+    - .gitignore
+    - .tmp_ultra_review_diff.txt
+    - k_config_center.sln.DotSettings.user
+    - review_diff.txt
+source_files: []
+depends_on: []
+related_to: []

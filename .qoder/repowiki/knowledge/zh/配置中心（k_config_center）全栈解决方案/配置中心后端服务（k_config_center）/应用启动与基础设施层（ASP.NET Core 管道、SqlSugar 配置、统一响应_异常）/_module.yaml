@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: config_center_backend/infrastructure_and_hosting
+title: 应用启动与基础设施层（ASP.NET Core 管道、SqlSugar 配置、统一响应/异常）
+scope:
+    - k_config_center/src/Infrastructure/
+    - k_config_center/Program.cs
+    - k_config_center/appsettings.json
+source_files: []
+depends_on: []
+related_to: []

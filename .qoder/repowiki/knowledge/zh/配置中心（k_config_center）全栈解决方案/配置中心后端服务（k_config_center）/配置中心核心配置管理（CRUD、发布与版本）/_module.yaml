@@ -1,0 +1,13 @@
+schema_version: 1
+module_path: config_center_backend/core_configuration
+title: 配置中心核心配置管理（CRUD、发布与版本）
+scope:
+    - k_config_center/src/Controllers/
+    - k_config_center/src/Services/
+    - k_config_center/src/Repositories/
+    - k_config_center/src/Entities/
+    - k_config_center/src/Models/
+source_files: []
+depends_on: []
+related_to:
+    - path: config_center_frontend/configuration_page

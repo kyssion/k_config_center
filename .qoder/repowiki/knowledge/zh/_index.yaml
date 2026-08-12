@@ -1,0 +1,119 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+branch: master
+nodes_managed: true
+exported_at: "2026-08-12T08:32:35Z"
+modules:
+    "":
+        dir_name: 配置中心（k_config_center）全栈解决方案
+        title: 配置中心（k_config_center）全栈解决方案
+        scope:
+            - k_config_center.sln
+            - .gitignore
+            - .tmp_ultra_review_diff.txt
+            - k_config_center.sln.DotSettings.user
+            - review_diff.txt
+        source_files: []
+        children:
+            - config_center_backend
+            - config_center_frontend
+            - docs
+        depends_on: []
+        related_to: []
+    config_center_backend:
+        dir_name: 配置中心后端服务（k_config_center）
+        title: 配置中心后端服务（k_config_center）
+        scope:
+            - k_config_center/
+        source_files: []
+        children:
+            - config_center_backend/core_configuration
+            - config_center_backend/infrastructure_and_hosting
+        depends_on: []
+        related_to: []
+    config_center_backend/core_configuration:
+        dir_name: 配置中心核心配置管理（CRUD、发布与版本）
+        title: 配置中心核心配置管理（CRUD、发布与版本）
+        scope:
+            - k_config_center/src/Controllers/
+            - k_config_center/src/Services/
+            - k_config_center/src/Repositories/
+            - k_config_center/src/Entities/
+            - k_config_center/src/Models/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: config_center_frontend/configuration_page
+    config_center_backend/infrastructure_and_hosting:
+        dir_name: 应用启动与基础设施层（ASP.NET Core 管道、SqlSugar 配置、统一响应_异常）
+        title: 应用启动与基础设施层（ASP.NET Core 管道、SqlSugar 配置、统一响应/异常）
+        scope:
+            - k_config_center/src/Infrastructure/
+            - k_config_center/Program.cs
+            - k_config_center/appsettings.json
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    config_center_frontend:
+        dir_name: 配置中心前端（Config Center Frontend）
+        title: 配置中心前端（Config Center Frontend）
+        scope:
+            - web/
+        source_files: []
+        children:
+            - config_center_frontend/app_shell
+            - config_center_frontend/configuration_page
+            - config_center_frontend/shared_ui
+        depends_on: []
+        related_to: []
+    config_center_frontend/app_shell:
+        dir_name: 应用外壳与路由布局
+        title: 应用外壳与路由布局
+        scope:
+            - web/src/layouts/
+            - web/src/router/
+            - web/src/App.tsx
+            - web/src/main.tsx
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: config_center_frontend/shared_ui
+    config_center_frontend/configuration_page:
+        dir_name: 配置中心前端配置管理页面
+        title: 配置中心前端配置管理页面
+        scope:
+            - web/src/pages/configuration/
+            - web/src/api/configuration.ts
+            - web/src/api/operationLog.ts
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: config_center_backend/core_configuration
+            - path: config_center_frontend/shared_ui
+    config_center_frontend/shared_ui:
+        dir_name: 配置中心前端共享 UI 组件与 Hook
+        title: 配置中心前端共享 UI 组件与 Hook
+        scope:
+            - web/src/components/
+            - web/src/hooks/
+            - web/src/utils/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: config_center_frontend/app_shell
+            - path: config_center_frontend/configuration_page
+    docs:
+        dir_name: 配置中心项目文档（架构_设计_DDL）
+        title: 配置中心项目文档（架构/设计/DDL）
+        scope:
+            - docs/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []

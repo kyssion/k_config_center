@@ -1,0 +1,12 @@
+schema_version: 1
+module_path: config_center_frontend/configuration_page
+title: 配置中心前端配置管理页面
+scope:
+    - web/src/pages/configuration/
+    - web/src/api/configuration.ts
+    - web/src/api/operationLog.ts
+source_files: []
+depends_on: []
+related_to:
+    - path: config_center_backend/core_configuration
+    - path: config_center_frontend/shared_ui

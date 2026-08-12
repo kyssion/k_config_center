@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: config_center_frontend
+title: 配置中心前端（Config Center Frontend）
+scope:
+    - web/
+source_files: []
+depends_on: []
+related_to: []

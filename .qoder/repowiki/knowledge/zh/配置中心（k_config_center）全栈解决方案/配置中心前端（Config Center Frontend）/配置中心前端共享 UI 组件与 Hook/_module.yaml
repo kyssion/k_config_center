@@ -1,0 +1,12 @@
+schema_version: 1
+module_path: config_center_frontend/shared_ui
+title: 配置中心前端共享 UI 组件与 Hook
+scope:
+    - web/src/components/
+    - web/src/hooks/
+    - web/src/utils/
+source_files: []
+depends_on: []
+related_to:
+    - path: config_center_frontend/app_shell
+    - path: config_center_frontend/configuration_page

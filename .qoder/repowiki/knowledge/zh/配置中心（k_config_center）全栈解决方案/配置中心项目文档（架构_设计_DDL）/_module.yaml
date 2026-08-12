@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: docs
+title: 配置中心项目文档（架构/设计/DDL）
+scope:
+    - docs/
+source_files: []
+depends_on: []
+related_to: []
