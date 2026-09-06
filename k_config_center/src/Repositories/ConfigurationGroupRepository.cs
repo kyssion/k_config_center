@@ -19,8 +19,10 @@ public class ConfigurationGroupRepository(ISqlSugarClient database)
             .Select((it, ns, env) => new { Entity = it, ns.NamespaceKey, ns.NamespaceName, env.EnvironmentKey, env.EnvironmentName }).ToListAsync())
         .Select(row => From(row.Entity) with
         {
-            NamespaceKey = row.NamespaceKey, NamespaceName = row.NamespaceName,
-            EnvironmentKey = row.EnvironmentKey, EnvironmentName = row.EnvironmentName
+            NamespaceKey = row.NamespaceKey,
+            NamespaceName = row.NamespaceName,
+            EnvironmentKey = row.EnvironmentKey,
+            EnvironmentName = row.EnvironmentName
         }).ToList();
 
     /// <summary>按 id 查单条（已软删返回 null）</summary>

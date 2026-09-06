@@ -25,8 +25,12 @@ public class ConfigurationRepository(ISqlSugarClient database)
             { Entity = it, ns.NamespaceName, env.EnvironmentName, grp.GroupName, ns.NamespaceKey, env.EnvironmentKey, grp.GroupKey }).ToListAsync())
         .Select(row => From(row.Entity) with
         {
-            NamespaceName = row.NamespaceName, EnvironmentName = row.EnvironmentName, GroupName = row.GroupName,
-            NamespaceKey = row.NamespaceKey, EnvironmentKey = row.EnvironmentKey, GroupKey = row.GroupKey
+            NamespaceName = row.NamespaceName,
+            EnvironmentName = row.EnvironmentName,
+            GroupName = row.GroupName,
+            NamespaceKey = row.NamespaceKey,
+            EnvironmentKey = row.EnvironmentKey,
+            GroupKey = row.GroupKey
         }).ToList();
 
     /// <summary>按 id 查单条（已软删返回 null）：LeftJoin 带出三个维度的冗余名称与业务 key，与列表同口径</summary>
@@ -42,8 +46,12 @@ public class ConfigurationRepository(ISqlSugarClient database)
         return row == null ? null
             : From(row.Entity) with
             {
-                NamespaceName = row.NamespaceName, EnvironmentName = row.EnvironmentName, GroupName = row.GroupName,
-                NamespaceKey = row.NamespaceKey, EnvironmentKey = row.EnvironmentKey, GroupKey = row.GroupKey
+                NamespaceName = row.NamespaceName,
+                EnvironmentName = row.EnvironmentName,
+                GroupName = row.GroupName,
+                NamespaceKey = row.NamespaceKey,
+                EnvironmentKey = row.EnvironmentKey,
+                GroupKey = row.GroupKey
             };
     }
 

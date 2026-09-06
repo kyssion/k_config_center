@@ -13,3 +13,11 @@ k_config_center/wwwroot/
 
 # 前端依赖目录，不入库
 node_modules/
+
+# 代码评审 / AI 会话产生的临时 diff 快照，不入库
+review_diff.txt
+.tmp_*
+*.tmp
+
+# 本机 IDE 私有配置
+*.DotSettings.user

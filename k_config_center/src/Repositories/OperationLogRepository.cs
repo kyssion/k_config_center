@@ -18,7 +18,11 @@ public class OperationLogRepository(ISqlSugarClient database)
             "VALUES (CAST(@namespaceId AS bigint), CAST(@environmentId AS bigint), CAST(@groupId AS bigint), CAST(@configurationId AS bigint), @operation, CAST(@detail AS jsonb), @operator, @clientIpAddress)",
             new
             {
-                namespaceId, environmentId, groupId, configurationId, operation,
+                namespaceId,
+                environmentId,
+                groupId,
+                configurationId,
+                operation,
                 detail = JsonSerializer.Serialize(detail),
                 @operator = operatorName,
                 clientIpAddress
@@ -75,9 +79,12 @@ public class OperationLogRepository(ISqlSugarClient database)
             var configuration = log.ConfigurationId == null ? null : configurationById.GetValueOrDefault(log.ConfigurationId.Value);
             return From(log) with
             {
-                NamespaceKey = ns?.NamespaceKey, NamespaceName = ns?.NamespaceName,
-                EnvironmentKey = environment?.EnvironmentKey, EnvironmentName = environment?.EnvironmentName,
-                GroupKey = group?.GroupKey, GroupName = group?.GroupName,
+                NamespaceKey = ns?.NamespaceKey,
+                NamespaceName = ns?.NamespaceName,
+                EnvironmentKey = environment?.EnvironmentKey,
+                EnvironmentName = environment?.EnvironmentName,
+                GroupKey = group?.GroupKey,
+                GroupName = group?.GroupName,
                 ConfigurationKey = configuration?.ConfigurationKey
             };
         }).ToList(), total);

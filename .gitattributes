@@ -1,0 +1,22 @@
+# 换行符策略:仓库索引统一 LF,文本文件检出按平台惯例转换
+* text=auto
+
+# shell 脚本必须保持 LF(CRLF 会导致 bash 报错无法执行)
+*.sh text eol=lf
+
+# C# 源码保持 LF,与 .editorconfig 的 end_of_line = lf 一致,
+# 否则 Windows autocrlf 检出 CRLF 后 dotnet format --verify-no-changes 会失败
+*.cs text eol=lf
+
+# Visual Studio 解决方案/项目文件按 Windows 惯例 CRLF 检出
+*.sln text eol=crlf
+*.csproj text eol=crlf
+
+# 二进制文件不做任何换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
