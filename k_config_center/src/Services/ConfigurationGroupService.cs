@@ -12,11 +12,8 @@ public class ConfigurationGroupService(
     ConfigurationGroupRepository configurationGroupRepository,
     ConfigurationRepository configurationRepository,
     OperationLogRepository operationLogRepository,
-    IHttpContextAccessor httpContextAccessor)
+    OperatorContext operatorContext)
 {
-    /// <summary>当前请求对象：供操作人与客户端 IP 提取</summary>
-    private HttpRequest Request => httpContextAccessor.HttpContext!.Request;
-
     /// <summary>配置组列表：命名空间/环境过滤均可选（后端方案端点表两参数并列），按创建时间排序</summary>
     public async Task<List<ConfigurationGroupResponse>> ListAsync(long? namespaceId, long? environmentId) =>
         (await configurationGroupRepository.ListAsync(namespaceId, environmentId))
@@ -27,7 +24,7 @@ public class ConfigurationGroupService(
     {
         var data = new ConfigurationGroupData(0, request.NamespaceId, request.EnvironmentId, request.GroupKey,
             request.GroupName, request.Description, Status: 1,
-            CreatedBy: OperationHelper.GetOperator(Request), UpdatedBy: null,
+            CreatedBy: operatorContext.Operator, UpdatedBy: null,
             CreatedAt: DateTimeOffset.UtcNow, UpdatedAt: DateTimeOffset.UtcNow);
         try { data = await configurationGroupRepository.InsertAsync(data); }
         catch (Exception exception) when (OperationHelper.IsUniqueViolation(exception))
@@ -43,7 +40,7 @@ public class ConfigurationGroupService(
     {
         var existing = await configurationGroupRepository.GetByIdAsync(id)
             ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置组不存在");
-        await configurationGroupRepository.UpdateAsync(id, request.GroupName, request.Description, request.Status, OperationHelper.GetOperator(Request));
+        await configurationGroupRepository.UpdateAsync(id, request.GroupName, request.Description, request.Status, operatorContext.Operator);
         // 审计日志维度带全：上级命名空间/环境 id 从既有记录取，避免日志只挂配置组导致审计页缺失上级维度信息
         await WriteLogAsync("UPDATE", new { resource = "group", request.GroupName },
             namespaceId: existing.NamespaceId, environmentId: existing.EnvironmentId, groupId: id);
@@ -61,8 +58,8 @@ public class ConfigurationGroupService(
             namespaceId: existing.NamespaceId, environmentId: existing.EnvironmentId, groupId: id);
     }
 
-    /// <summary>写审计日志：操作人/客户端 IP 从当前请求提取后交给日志模块的 Repository</summary>
+    /// <summary>写审计日志：操作人/客户端 IP 取自当前请求的 OperatorContext</summary>
     private Task WriteLogAsync(string operation, object detail, long? namespaceId = null, long? environmentId = null, long? groupId = null) =>
         operationLogRepository.InsertAsync(operation, detail,
-            OperationHelper.GetOperator(Request), OperationHelper.GetClientIpAddress(Request), namespaceId, environmentId, groupId);
+            operatorContext.Operator, operatorContext.ClientIpAddress, namespaceId, environmentId, groupId);
 }

@@ -7,6 +7,7 @@ import {
   DeploymentUnitOutlined,
   FileTextOutlined,
   FolderOutlined,
+  KeyOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -31,6 +32,8 @@ export default function MainLayout() {
 
   // 操作人：写 localStorage 的 operator，http.ts 请求拦截器读取并注入 X-Operator 头
   const [operator, setOperator] = useState(() => localStorage.getItem('operator') || 'portal');
+  // API Key：服务端启用鉴权（Auth:Enabled）时必填，http.ts 读取并注入 X-Api-Key 头
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem('apiKey') || '');
 
   // 菜单高亮：深层路由（如 /configuration/:id/edit）归并到其一级菜单
   const currentMenuItem = useMemo(
@@ -42,6 +45,11 @@ export default function MainLayout() {
   const handleOperatorChange = (value: string) => {
     setOperator(value);
     localStorage.setItem('operator', value || 'portal');
+  };
+
+  const handleApiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setApiKey(e.target.value);
+    localStorage.setItem('apiKey', e.target.value);
   };
 
   return (
@@ -84,15 +92,27 @@ export default function MainLayout() {
           <Typography.Text strong style={{ fontSize: 16 }}>
             {currentMenuItem?.label ?? '配置中心'}
           </Typography.Text>
-          <Tooltip title="操作人：写入操作审计日志的身份标识">
-            <Input
-              style={{ width: 160 }}
-              prefix={<UserOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
-              value={operator}
-              onChange={(e) => handleOperatorChange(e.target.value)}
-              placeholder="操作人"
-            />
-          </Tooltip>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Tooltip title="API Key：服务端启用鉴权时必填，留空表示不发送">
+              <Input
+                style={{ width: 200 }}
+                prefix={<KeyOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+                value={apiKey}
+                onChange={handleApiKeyChange}
+                placeholder="API Key（可选）"
+                type="password"
+              />
+            </Tooltip>
+            <Tooltip title="操作人：写入操作审计日志的身份标识">
+              <Input
+                style={{ width: 160 }}
+                prefix={<UserOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+                value={operator}
+                onChange={(e) => handleOperatorChange(e.target.value)}
+                placeholder="操作人"
+              />
+            </Tooltip>
+          </div>
         </Header>
         <Content style={{ padding: 24, overflow: 'auto' }}>
           <Outlet />

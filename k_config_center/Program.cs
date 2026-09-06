@@ -1,21 +1,35 @@
+using System.Net;
 using k_config_center.Infrastructure;
 using k_config_center.Repositories;
 using k_config_center.Services;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.OpenApi;
 
 namespace k_config_center;
 
-public class Program
+public partial class Program
 {
     public static void Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
 
         // Add services to the container.
-        builder.Services.AddControllers();
+        // 关闭 ApiController 的自动 400（ProblemDetails 响应）：校验失败统一走 ModelValidationFilter
+        // 转 BusinessException(10003)，保持 { code, message, data } 契约、HTTP 恒 200（后端方案 7.1）
+        builder.Services.Configure<ApiBehaviorOptions>(options => options.SuppressModelStateInvalidFilter = true);
+        builder.Services.AddControllers(options => options.Filters.Add<ModelValidationFilter>());
         builder.Services.AddSqlSugarSetup(builder.Configuration);
         // Service 层通过 IHttpContextAccessor 获取当前请求（操作人/客户端 IP 提取）
         builder.Services.AddHttpContextAccessor();
+        // 操作人上下文：每请求作用域从 HttpContext 提取一次，业务层只依赖这两个值，不耦合 Web 类型
+        builder.Services.AddScoped<OperatorContext>(serviceProvider =>
+        {
+            var httpContext = serviceProvider.GetRequiredService<IHttpContextAccessor>().HttpContext;
+            return httpContext == null
+                ? new OperatorContext("system", null)
+                : new OperatorContext(OperationHelper.GetOperator(httpContext.Request), OperationHelper.GetClientIpAddress(httpContext.Request));
+        });
         // 数据访问层：唯一允许注入 ISqlSugarClient 与接触 Entities 的一层，按模块划分
         builder.Services.AddScoped<NamespaceRepository>();
         builder.Services.AddScoped<EnvironmentRepository>();
@@ -32,8 +46,10 @@ public class Program
         builder.Services.AddScoped<PublishService>();
         builder.Services.AddScoped<ClientConfigurationService>();
         builder.Services.AddScoped<OperationLogService>();
+        // 健康检查：/health/db 做真实数据库连接探测（失败 503，供编排器探针使用）
+        builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database");
 
-        // Swagger（Swashbuckle）：接口文档由各 Controller / Models 的 XML 注释生成，仅 Development 环境启用 UI
+        // Swagger（Swashbuckle）：接口文档由各 Controller / Models 的 XML 注释生成，仅开发/测试环境启用 UI
         builder.Services.AddSwaggerGen(options =>
         {
             options.SwaggerDoc("v1", new OpenApiInfo
@@ -47,23 +63,39 @@ public class Program
 
                     错误码分段（后端方案 7.1）：
                     - 0：成功
-                    - 10000+：通用（10000 服务器内部错误、10001 参数校验失败、10002 资源不存在）
+                    - 10000+：通用（10000 服务器内部错误、10001 业务状态非法、10002 资源不存在、10003 参数校验失败、10004 未授权）
                     - 20000+：基础维度（20001/20002/20003 三级 key 冲突、20004 存在未删除下级资源拒绝删除）
                     - 30000+：配置与发布（30001 配置 key 冲突、30002 无未发布变更、30003 回滚版本不存在、30004 发布并发冲突）
                     """
             });
             // 读取编译生成的 XML 注释文件（csproj 已开 GenerateDocumentationFile）
             options.IncludeXmlComments(Path.Combine(AppContext.BaseDirectory, "k_config_center.xml"), includeControllerXmlComments: true);
-            // 为所有写操作补充 X-Operator 请求头说明
+            // 为所有操作补充 X-Api-Key、为写操作补充 X-Operator 请求头说明
             options.OperationFilter<SwaggerOperatorHeaderFilter>();
         });
 
         var app = builder.Build();
 
         // Configure the HTTP request pipeline.
-        if (app.Environment.IsDevelopment())
+        // 反向代理适配：优先采用 X-Forwarded-For / X-Forwarded-Proto（否则经 Nginx/网关转发后审计 IP 全是代理 IP）。
+        // 默认只信任回环代理；上游代理不在本机时，在配置 ForwardedHeaders:KnownProxies（IP 数组）中登记
+        var forwardedHeadersOptions = new ForwardedHeadersOptions
         {
-            // Swagger UI 仅开发环境暴露（生产不开），默认路径 /swagger
+            ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
+        };
+        foreach (var proxy in builder.Configuration.GetSection("ForwardedHeaders:KnownProxies").Get<string[]>() ?? [])
+            forwardedHeadersOptions.KnownProxies.Add(IPAddress.Parse(proxy));
+        app.UseForwardedHeaders(forwardedHeadersOptions);
+
+        if (app.Environment.IsProduction())
+        {
+            // 生产启用 HSTS（HTTPS 强制），配合 UseHttpsRedirection
+            app.UseHsts();
+        }
+
+        if (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Testing"))
+        {
+            // Swagger UI 仅开发/测试环境暴露（生产不开），默认路径 /swagger
             app.UseSwagger();
             app.UseSwaggerUI();
         }
@@ -91,10 +123,25 @@ public class Program
             }
         });
 
+        // API Key 鉴权：Auth:Enabled=true 时所有 /api 请求须带一致的 X-Api-Key（缺省关闭，本地开发零负担）
+        app.UseMiddleware<ApiKeyMiddleware>();
+
         app.UseHttpsRedirection();
 
-        // 托管 wwwroot 下的前端构建产物
-        app.UseStaticFiles();
+        // 托管 wwwroot 下的前端构建产物；Vite 产物文件名带内容 hash 可长缓存，index.html 必须每次取最新
+        app.UseStaticFiles(new StaticFileOptions
+        {
+            OnPrepareResponse = fileContext =>
+            {
+                if (!fileContext.File.Name.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+                    fileContext.Context.Response.Headers.CacheControl = "public, max-age=31536000, immutable";
+            }
+        });
+
+        // 探针健康检查（不走统一契约，按 HTTP 状态码表达）：
+        // /health/live 仅确认进程存活；/health/db 含真实数据库连接检查，失败返回 503 让编排器摘流量
+        app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
+        app.MapHealthChecks("/health/db", new HealthCheckOptions());
 
         app.MapControllers();
 
@@ -107,3 +154,7 @@ public class Program
         app.Run();
     }
 }
+
+/// <summary>供 WebApplicationFactory 集成测试挂载入口（测试工程通过 partial 访问 Program）</summary>
+/// <summary>供 WebApplicationFactory 集成测试挂载入口（测试工程通过 partial 访问 Program）</summary>
+public partial class Program { }

@@ -19,11 +19,12 @@ public static class OperationHelper
     public static string? GetClientIpAddress(HttpRequest request) =>
         request.HttpContext.Connection.RemoteIpAddress?.ToString();
 
-    /// <summary>识别 PostgreSQL 唯一约束冲突（SQLSTATE 23505），供各创建/发布接口转业务错误码</summary>
+    /// <summary>识别 PostgreSQL 唯一约束冲突（SQLSTATE 23505），供各创建/发布接口转业务错误码。
+    /// 只按异常链上的 PostgresException 精确判定，不做消息文本匹配（避免误报）</summary>
     public static bool IsUniqueViolation(Exception exception)
     {
         for (var current = exception; current != null; current = current.InnerException)
             if (current is Npgsql.PostgresException { SqlState: "23505" }) return true;
-        return exception.Message.Contains("23505");
+        return false;
     }
 }

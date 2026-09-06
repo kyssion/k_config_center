@@ -38,7 +38,7 @@ namespace（命名空间）→ environment（环境）→ configuration_group（
 
 | 目的 | 命令 |
 |------|------|
-| **改动后验证（必跑）** | `./scripts/check.sh` ＝ `dotnet build` + `dotnet format --verify-no-changes` + `cd web && npx tsc --noEmit` |
+| **改动后验证（必跑）** | `./scripts/check.sh` ＝ `dotnet build` + `dotnet format --verify-no-changes` + `dotnet test` + `cd web && npx tsc --noEmit` |
 | 一键启动前后端 | `./scripts/dev.sh`（后端 :9000，前端 :9001，Ctrl+C 双杀） |
 | 只起后端 | `cd k_config_center && dotnet run`（http://localhost:9000，Swagger 在 `/swagger`，仅 Development） |
 | 只起前端 | `cd web && npm run dev`（http://localhost:9001，`/api` 代理到 :9000） |
@@ -61,7 +61,8 @@ k_config_center/                  # 后端 ASP.NET Core
     Models/
       Domain/                     # record 业务数据（Repository 对外交换的数据形态）
       Requests/ Responses/        # API 入参 / 出参 DTO
-    Infrastructure/               # ApiResponse、BusinessException、ErrorCode、SqlSugarSetup、事务 Runner
+    Infrastructure/               # ApiResponse、BusinessException、ErrorCode、SqlSugarSetup、事务 Runner、鉴权/校验/健康检查中间件
+k_config_center.Tests/           # xUnit 测试工程（WebApplicationFactory 集成测试，不依赖真实数据库）
 web/                              # 前端 React SPA
   src/
     api/                          # 按资源一个文件（http.ts 为 axios 封装，拦截器已解包 data）
@@ -112,10 +113,11 @@ scripts/                          # check.sh / dev.sh / build.sh
 ## 8. 验证回路（每次改动收尾必做）
 
 ```bash
-./scripts/check.sh    # dotnet build（0 警告 0 错误）+ dotnet format 无差异 + tsc --noEmit
+./scripts/check.sh    # dotnet build（0 警告 0 错误）+ dotnet format 无差异 + dotnet test 全过 + tsc --noEmit
 ```
 
-- 后端无单测基础设施，`dotnet build` 干净 + Swagger 手测是当前验证手段；涉及接口行为改动时，启动 `./scripts/dev.sh` 用 Swagger（/swagger）实测。
+- 测试工程 `k_config_center.Tests/`（xUnit + WebApplicationFactory）：单元测试 + API 契约集成测试（统一响应、参数校验 10003、鉴权 10004、探针语义），测试宿主不连真实数据库；涉及接口行为改动时必须补对应测试。
+- 涉及接口行为改动时，另启动 `./scripts/dev.sh` 用 Swagger（/swagger）实测。
 - 前端验证：`npm run build` 通过 + 浏览器实测（:9001）。
 - **提交前对照第 0 节自查**：本次改动有没有过度设计、过度封装？可读性是否打折？有没有引入 N+1 / 重复查询 / 不必要重渲染？
 - 提交信息遵循 Conventional Commits，分支与提交流程见第 9 节。
@@ -153,17 +155,18 @@ chore(deps): 钉版 SQLitePCLRaw 修复 CVE-2025-6965
 ### 9.3 提交前自查清单
 
 ```
-./scripts/check.sh    # dotnet build 0 警告 0 错误 + dotnet format 无格式差异 + tsc --noEmit
+./scripts/check.sh    # dotnet build 0 警告 0 错误 + dotnet format 无格式差异 + dotnet test 全部通过 + tsc --noEmit
 git status            # 无产物文件混入（bin/obj/node_modules/wwwroot/.idea 等）
 ```
 
-当前无测试工程，`dotnet test` 暂不适用；建立测试工程后加入本清单并要求全绿。
-
-**文档同步**：功能变更须同步更新 `docs/` 对应文档（变更类型 → 文档的对应关系见 [docs/README.md](docs/README.md#文档维护规则)）。
+文档同步：功能变更须同步更新 `docs/` 对应文档（变更类型 → 文档的对应关系见 [docs/README.md](docs/README.md#文档维护规则)）。
 
 ## 10. 陷阱清单
 
 - **端口约定**：后端 9000（launchSettings http profile），前端 dev 9001；改端口需同步 vite.config.ts 代理目标。
+- **探针端点不走统一契约**：`/health/live`、`/health/db` 按 HTTP 状态码表达（200/503），供编排器使用；业务接口才是"HTTP 恒 200 + code"。
+- **API Key 鉴权**：`Auth:Enabled=true` 时所有 `/api` 请求须带 `X-Api-Key`（10004）；本地缺省关闭。前端在 Portal 顶栏配置。
+- **record 校验特性必须放在构造参数上**（`[Required, StringLength(64)] string Key`），用 `[property:]` 指到属性会导致校验阶段抛异常（详见 ModelValidationFilter 注释）。
 - `k_config_center/wwwroot/` 是前端构建产物，**已 gitignore，不要手工改**。
 - `appsettings.Development.json` 不入库；仓库里只有 `.example` 模板。数据库连接串读 `ConnectionStrings:PostgreSQL`。
 - vite build 输出目录在仓库根的 `k_config_center/wwwroot/`（注意是后端项目内，不是 web/ 内）。

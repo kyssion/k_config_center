@@ -15,11 +15,8 @@ public class ConfigurationService(
     ConfigurationVersionRepository configurationVersionRepository,
     ConfigurationGroupRepository configurationGroupRepository,
     OperationLogRepository operationLogRepository,
-    IHttpContextAccessor httpContextAccessor)
+    OperatorContext operatorContext)
 {
-    /// <summary>当前请求对象：供操作人与客户端 IP 提取</summary>
-    private HttpRequest Request => httpContextAccessor.HttpContext!.Request;
-
     /// <summary>配置项列表（组/命名空间/环境/状态/关键字过滤均可选）：附「有未发布变更」标记，前端不做 md5 对比。
     /// 一次性取出全部生效版本的 md5 做内存比对，避免逐条回查数据库</summary>
     public async Task<List<ConfigurationResponse>> ListAsync(long? groupId, long? namespaceId, long? environmentId, string? status, string? keyword)
@@ -53,7 +50,7 @@ public class ConfigurationService(
         var data = new ConfigurationData(0, group.Id, group.NamespaceId, group.EnvironmentId, request.ConfigurationKey,
             request.Content, request.Format, OperationHelper.ComputeMd5(request.Content), request.Description, request.Tags,
             Status: "DRAFT", PublishedVersionId: null, LatestVersionNumber: 0, PublishedAt: null,
-            CreatedBy: OperationHelper.GetOperator(Request), UpdatedBy: null,
+            CreatedBy: operatorContext.Operator, UpdatedBy: null,
             CreatedAt: DateTimeOffset.UtcNow, UpdatedAt: DateTimeOffset.UtcNow);
         try { data = await configurationRepository.InsertAsync(data); }
         catch (Exception exception) when (OperationHelper.IsUniqueViolation(exception))
@@ -71,7 +68,7 @@ public class ConfigurationService(
             ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置不存在");
         var md5 = OperationHelper.ComputeMd5(request.Content);
         await configurationRepository.UpdateDraftAsync(id, request.Content, request.Format, md5,
-            request.Description, request.Tags, OperationHelper.GetOperator(Request));
+            request.Description, request.Tags, operatorContext.Operator);
         await WriteLogAsync("UPDATE", new { resource = "configuration", existing.ConfigurationKey, md5 },
             existing.NamespaceId, existing.EnvironmentId, existing.GroupId, id);
     }
@@ -101,9 +98,9 @@ public class ConfigurationService(
         return ConfigurationVersionResponse.From(version);
     }
 
-    /// <summary>写审计日志：操作人/客户端 IP 从当前请求提取后交给日志模块的 Repository</summary>
+    /// <summary>写审计日志：操作人/客户端 IP 取自当前请求的 OperatorContext</summary>
     private Task WriteLogAsync(string operation, object detail, long? namespaceId, long? environmentId, long? groupId, long? configurationId) =>
         operationLogRepository.InsertAsync(operation, detail,
-            OperationHelper.GetOperator(Request), OperationHelper.GetClientIpAddress(Request),
+            operatorContext.Operator, operatorContext.ClientIpAddress,
             namespaceId, environmentId, groupId, configurationId);
 }

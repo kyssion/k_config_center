@@ -14,11 +14,8 @@ public class NamespaceService(
     NamespaceRepository namespaceRepository,
     EnvironmentRepository environmentRepository,
     OperationLogRepository operationLogRepository,
-    IHttpContextAccessor httpContextAccessor)
+    OperatorContext operatorContext)
 {
-    /// <summary>当前请求对象：供操作人与客户端 IP 提取</summary>
-    private HttpRequest Request => httpContextAccessor.HttpContext!.Request;
-
     /// <summary>命名空间列表：软删过滤由 Repository 的查询（全局过滤器）保证，按创建时间排序</summary>
     public async Task<List<NamespaceResponse>> ListAsync() =>
         (await namespaceRepository.ListAsync()).Select(NamespaceResponse.From).ToList();
@@ -27,7 +24,7 @@ public class NamespaceService(
     public async Task<NamespaceResponse> CreateAsync(NamespaceCreateRequest request)
     {
         var data = new NamespaceData(0, request.NamespaceKey, request.NamespaceName, request.Description, Status: 1,
-            CreatedBy: OperationHelper.GetOperator(Request), UpdatedBy: null,
+            CreatedBy: operatorContext.Operator, UpdatedBy: null,
             CreatedAt: DateTimeOffset.UtcNow, UpdatedAt: DateTimeOffset.UtcNow);
         try { data = await namespaceRepository.InsertAsync(data); }
         catch (Exception exception) when (OperationHelper.IsUniqueViolation(exception))
@@ -42,7 +39,7 @@ public class NamespaceService(
     {
         if (await namespaceRepository.GetByIdAsync(id) == null)
             throw new BusinessException(ErrorCode.ResourceNotFound, "命名空间不存在");
-        await namespaceRepository.UpdateAsync(id, request.NamespaceName, request.Description, request.Status, OperationHelper.GetOperator(Request));
+        await namespaceRepository.UpdateAsync(id, request.NamespaceName, request.Description, request.Status, operatorContext.Operator);
         await WriteLogAsync("UPDATE", new { resource = "namespace", request.NamespaceName }, namespaceId: id);
     }
 
@@ -57,8 +54,8 @@ public class NamespaceService(
         await WriteLogAsync("DELETE", new { resource = "namespace", id }, namespaceId: id);
     }
 
-    /// <summary>写审计日志：操作人/客户端 IP 从当前请求提取后交给日志模块的 Repository</summary>
+    /// <summary>写审计日志：操作人/客户端 IP 取自当前请求的 OperatorContext</summary>
     private Task WriteLogAsync(string operation, object detail, long? namespaceId = null) =>
         operationLogRepository.InsertAsync(operation, detail,
-            OperationHelper.GetOperator(Request), OperationHelper.GetClientIpAddress(Request), namespaceId);
+            operatorContext.Operator, operatorContext.ClientIpAddress, namespaceId);
 }

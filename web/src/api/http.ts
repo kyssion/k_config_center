@@ -13,10 +13,15 @@ const http = axios.create({
   timeout: 30_000,
 });
 
-// 请求拦截器：非 GET 的写操作注入 X-Operator 头（后端缺省 system，Portal 缺省 portal）
+// 请求拦截器：非 GET 写操作注入 X-Operator 头（后端缺省 system，Portal 缺省 portal）；
+// 服务端启用 API Key 鉴权时注入 X-Api-Key（MainLayout 顶栏配置，存 localStorage，未配置不发）
 http.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   if (config.method && config.method.toLowerCase() !== 'get') {
     config.headers.set('X-Operator', localStorage.getItem('operator') || 'portal');
+  }
+  const apiKey = localStorage.getItem('apiKey');
+  if (apiKey) {
+    config.headers.set('X-Api-Key', apiKey);
   }
   return config;
 });

@@ -8,10 +8,6 @@ namespace k_config_center.Repositories;
 /// 读查询走全局软删过滤器（deleted_at IS NULL）；Updateable 不走过滤器，存在性校验由 Service 先经查询完成</summary>
 public class NamespaceRepository(ISqlSugarClient database)
 {
-    /// <summary>命名空间总数：供健康检查做轻量连通性验证</summary>
-    public Task<int> CountAsync() =>
-        database.Queryable<ConfigCenterNamespace>().CountAsync();
-
     /// <summary>全部命名空间，按创建时间排序</summary>
     public async Task<List<NamespaceData>> ListAsync() =>
         (await database.Queryable<ConfigCenterNamespace>().OrderBy(it => it.CreatedAt).ToListAsync())

@@ -16,11 +16,8 @@ public class PublishService(
     ConfigurationVersionRepository configurationVersionRepository,
     OperationLogRepository operationLogRepository,
     DatabaseTransactionRunner transactionRunner,
-    IHttpContextAccessor httpContextAccessor)
+    OperatorContext operatorContext)
 {
-    /// <summary>当前请求对象：供操作人与客户端 IP 提取</summary>
-    private HttpRequest Request => httpContextAccessor.HttpContext!.Request;
-
     /// <summary>发布：把当前编辑态内容固化为新版本并切换生效指针（文档 8.2）。
     /// 已是发布态且内容与生效版本一致（无未发布变更）时拒绝重复发布（30002）；
     /// OFFLINE 状态允许直接发布以恢复上线（状态机 OFFLINE → publish → PUBLISHED）</summary>
@@ -43,7 +40,7 @@ public class PublishService(
             var version = new ConfigurationVersionData(0, id, versionNumber,
                 configuration.Content, configuration.Format, configuration.Md5,
                 ChangeType: configuration.PublishedVersionId == null ? "CREATE" : "UPDATE", // 首发 CREATE，之后 UPDATE
-                request.ChangeRemark, OperationHelper.GetOperator(Request), DateTimeOffset.UtcNow);
+                request.ChangeRemark, operatorContext.Operator, DateTimeOffset.UtcNow);
             var versionId = await configurationVersionRepository.InsertAsync(version);
             await configurationRepository.UpdatePublishStateAsync(id, versionId);
             // 日志与业务变更同事务，同生共死（文档 8.5：事务型操作日志在 PublishService 事务内直接写）
@@ -69,7 +66,7 @@ public class PublishService(
             var version = new ConfigurationVersionData(0, id, versionNumber,
                 target.Content, target.Format, target.Md5, ChangeType: "ROLLBACK",
                 request.ChangeRemark ?? $"回滚自 v{target.VersionNumber}",
-                OperationHelper.GetOperator(Request), DateTimeOffset.UtcNow);
+                operatorContext.Operator, DateTimeOffset.UtcNow);
             var versionId = await configurationVersionRepository.InsertAsync(version);
             // 当前态内容同步为历史版本值，并切换生效指针
             await configurationRepository.UpdateRollbackStateAsync(id, target.Content, target.Format ?? "text", target.Md5, versionId);
@@ -87,7 +84,7 @@ public class PublishService(
             ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置不存在");
         if (configuration.Status != "PUBLISHED")
             throw new BusinessException(ErrorCode.InvalidBusinessState, "仅已发布状态的配置可下线");
-        await configurationRepository.UpdateOfflineStateAsync(id, OperationHelper.GetOperator(Request));
+        await configurationRepository.UpdateOfflineStateAsync(id, operatorContext.Operator);
         await WriteLogAsync("OFFLINE", new { resource = "configuration", configuration.ConfigurationKey }, configuration, id);
     }
 
@@ -107,9 +104,9 @@ public class PublishService(
         { throw new BusinessException(ErrorCode.PublishConcurrencyConflict, "发布并发冲突，请重试"); }
     }
 
-    /// <summary>写审计日志：归属维度取自配置的冗余 id，操作人/客户端 IP 从当前请求提取</summary>
+    /// <summary>写审计日志：归属维度取自配置的冗余 id，操作人/客户端 IP 取自 OperatorContext</summary>
     private Task WriteLogAsync(string operation, object detail, ConfigurationData configuration, long configurationId) =>
         operationLogRepository.InsertAsync(operation, detail,
-            OperationHelper.GetOperator(Request), OperationHelper.GetClientIpAddress(Request),
+            operatorContext.Operator, operatorContext.ClientIpAddress,
             configuration.NamespaceId, configuration.EnvironmentId, configuration.GroupId, configurationId);
 }

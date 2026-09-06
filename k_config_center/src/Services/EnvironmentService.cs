@@ -12,11 +12,8 @@ public class EnvironmentService(
     EnvironmentRepository environmentRepository,
     ConfigurationGroupRepository configurationGroupRepository,
     OperationLogRepository operationLogRepository,
-    IHttpContextAccessor httpContextAccessor)
+    OperatorContext operatorContext)
 {
-    /// <summary>当前请求对象：供操作人与客户端 IP 提取</summary>
-    private HttpRequest Request => httpContextAccessor.HttpContext!.Request;
-
     /// <summary>环境列表：命名空间过滤可选，按 sort_order 再按创建时间排序（后端方案 7.2）</summary>
     public async Task<List<EnvironmentResponse>> ListAsync(long? namespaceId) =>
         (await environmentRepository.ListByNamespaceAsync(namespaceId)).Select(EnvironmentResponse.From).ToList();
@@ -59,8 +56,8 @@ public class EnvironmentService(
             namespaceId: existing.NamespaceId, environmentId: id);
     }
 
-    /// <summary>写审计日志：操作人/客户端 IP 从当前请求提取后交给日志模块的 Repository</summary>
+    /// <summary>写审计日志：操作人/客户端 IP 取自当前请求的 OperatorContext</summary>
     private Task WriteLogAsync(string operation, object detail, long? namespaceId = null, long? environmentId = null) =>
         operationLogRepository.InsertAsync(operation, detail,
-            OperationHelper.GetOperator(Request), OperationHelper.GetClientIpAddress(Request), namespaceId, environmentId);
+            operatorContext.Operator, operatorContext.ClientIpAddress, namespaceId, environmentId);
 }

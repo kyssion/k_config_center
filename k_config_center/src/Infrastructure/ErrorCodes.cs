@@ -17,6 +17,12 @@ public enum ErrorCode
     /// <summary>资源不存在（通用段 10000+）：按 id/key 查询的目标资源不存在或已被删除</summary>
     ResourceNotFound = 10002,
 
+    /// <summary>参数校验失败（通用段 10000+）：请求体缺字段、类型不符或违反校验特性（Required/StringLength/Range）</summary>
+    InvalidParameter = 10003,
+
+    /// <summary>未授权（通用段 10000+）：服务端启用 API Key 鉴权时，请求头 X-Api-Key 缺失或无效</summary>
+    Unauthorized = 10004,
+
     /// <summary>命名空间 key 唯一冲突（基础维度段 20000+）</summary>
     NamespaceKeyConflict = 20001,
 
