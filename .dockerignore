@@ -1,0 +1,20 @@
+# 依赖与构建产物：前端依赖、.NET 中间产物均在镜像内重新生成，不进上下文
+web/node_modules
+k_config_center/bin
+k_config_center/obj
+
+# 旧的静态产物：镜像内以 node 阶段新构建的为准（阶段 2 会用 COPY --from 覆盖）
+k_config_center/wwwroot
+
+# IDE / 工具 / 文档 / 临时文件
+.idea
+.qoder
+.vs
+.git
+.gitignore
+docs
+*.md
+review_diff.txt
+.tmp_ultra_review_diff.txt
+Dockerfile
+.dockerignore
