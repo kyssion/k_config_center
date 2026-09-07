@@ -1,21 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import {
-  Alert,
-  Button,
-  Card,
-  Descriptions,
-  Form,
-  Input,
-  Modal,
-  Space,
-  Spin,
-  Tag,
-  Tooltip,
-  Typography,
-  message,
-} from 'antd';
-import { AlignLeftOutlined, ArrowLeftOutlined } from '@ant-design/icons';
+import { toast } from 'sonner';
+import { AlignLeft, ArrowLeft, Loader2, RefreshCw } from 'lucide-react';
 import Editor from '@monaco-editor/react';
+import '@/utils/monacoSetup';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import { getConfiguration, publishConfiguration, updateConfiguration } from '@/api/configuration';
 import type { ConfigFormat, ConfigurationDetailResponse } from '@/api/types';
@@ -26,6 +13,21 @@ import CopyableText from '@/components/CopyableText';
 import DimensionCell from '@/components/DimensionCell';
 import { usePolling } from '@/hooks/usePolling';
 import { getFormatter } from '@/utils/formatters';
+import { Alert } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import type { ReactNode } from 'react';
 
 /** 时间字段本地化展示 */
 const formatTime = (value: string | null) => (value ? new Date(value).toLocaleString() : '-');
@@ -43,6 +45,16 @@ const monacoLanguageMap: Record<ConfigFormat, string> = {
   xml: 'xml',
   toml: 'ini',
 };
+
+/** 信息栏单行：灰 label + 值，底部分隔线 */
+function InfoRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex gap-3 border-b py-2.5 text-sm last:border-b-0">
+      <span className="w-20 shrink-0 text-muted-foreground">{label}</span>
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
+}
 
 /**
  * 保存前基础语法校验，返回错误信息（null 表示通过）。
@@ -81,12 +93,12 @@ export default function ConfigurationEditor() {
   const [saving, setSaving] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
-  const [publishForm] = Form.useForm<{ changeRemark?: string }>();
+  const [publishRemark, setPublishRemark] = useState('');
 
   // 非法 ID 仅提示一次，跳转由渲染末尾的 Navigate 完成
   useEffect(() => {
     if (invalidId) {
-      message.error('配置 ID 非法');
+      toast.error('配置 ID 非法');
     }
   }, [invalidId]);
 
@@ -122,7 +134,7 @@ export default function ConfigurationEditor() {
   const handleSave = async () => {
     const error = validateContent(format, content);
     if (error) {
-      message.error(error);
+      toast.error(error);
       return;
     }
     setSaving(true);
@@ -134,7 +146,7 @@ export default function ConfigurationEditor() {
         description: detail?.configuration.description,
         tags: detail?.configuration.tags,
       });
-      message.success('保存成功（草稿，尚未发布）');
+      toast.success('保存成功（草稿，尚未发布）');
       await load();
     } catch {
       // 错误提示已由 http.ts 拦截器统一弹出
@@ -151,7 +163,7 @@ export default function ConfigurationEditor() {
     const formatter = getFormatter(format);
     const error = formatter.validate(content);
     if (error) {
-      message.error(`${format} 语法错误，无法格式化：${error}`);
+      toast.error(`${format} 语法错误，无法格式化：${error}`);
       return;
     }
     setContent(formatter.format(content));
@@ -160,15 +172,14 @@ export default function ConfigurationEditor() {
 
   /** 发布确认：发布的是服务端已保存的内容 */
   const handlePublish = async () => {
-    const values = await publishForm.validateFields();
     setPublishing(true);
     try {
       const result = await publishConfiguration(configurationId, {
-        changeRemark: values.changeRemark || null,
+        changeRemark: publishRemark || null,
       });
-      message.success(`发布成功，版本号 v${result.versionNumber}`);
+      toast.success(`发布成功，版本号 v${result.versionNumber}`);
       setPublishOpen(false);
-      publishForm.resetFields();
+      setPublishRemark('');
       await load();
     } catch {
       // 错误提示已由拦截器统一处理
@@ -183,7 +194,11 @@ export default function ConfigurationEditor() {
   }
 
   if (!detail) {
-    return <Spin style={{ display: 'block', margin: '80px auto' }} />;
+    return (
+      <div className="flex items-center justify-center py-20 text-muted-foreground">
+        <Loader2 className="size-6 animate-spin" />
+      </div>
+    );
   }
 
   const { configuration, publishedVersion } = detail;
@@ -191,36 +206,37 @@ export default function ConfigurationEditor() {
   return (
     <div>
       {/* 顶部工具条：返回 + 配置 key + 变更标记；右侧格式切换与操作按钮组 */}
-      <Card bordered={false} size="small" style={{ marginBottom: 16 }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 16,
-            flexWrap: 'wrap',
-          }}
-        >
-          <Space size={12} wrap>
-            <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/configuration')}>
+      <Card className="mb-4 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <Button variant="ghost" onClick={() => navigate('/configuration')}>
+              <ArrowLeft />
               返回列表
             </Button>
-            <Typography.Title level={4} style={{ margin: 0 }}>
-              {configuration.configurationKey}
-            </Typography.Title>
+            <h1 className="text-lg font-semibold tracking-tight">{configuration.configurationKey}</h1>
             {/* hasUnpublishedChange 由服务端计算，前端只做展示 */}
             {configuration.hasUnpublishedChange && (
-              <Tooltip title="当前内容与生效版本存在差异，发布后才对客户端生效">
-                <Tag color="orange">有未发布变更</Tag>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="outline" className="border-transparent bg-amber-50 text-amber-700">
+                    有未发布变更
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>当前内容与生效版本存在差异，发布后才对客户端生效</TooltipContent>
               </Tooltip>
             )}
             {dirty && (
-              <Tooltip title="本地修改尚未保存到服务端">
-                <Tag color="blue">本地未保存</Tag>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="outline" className="border-transparent bg-sky-50 text-sky-700">
+                    本地未保存
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>本地修改尚未保存到服务端</TooltipContent>
               </Tooltip>
             )}
-          </Space>
-          <Space>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
             <FormatSelect
               value={format}
               onChange={(value) => {
@@ -230,105 +246,99 @@ export default function ConfigurationEditor() {
             />
             {/* canFormat 的格式（json/yaml/xml/properties）提供格式化入口 */}
             {getFormatter(format).canFormat && (
-              <Button icon={<AlignLeftOutlined />} onClick={handleFormatContent}>
+              <Button variant="outline" onClick={handleFormatContent}>
+                <AlignLeft />
                 格式化
               </Button>
             )}
-            <Button onClick={handleSave} loading={saving}>
+            <Button variant="outline" onClick={handleSave} disabled={saving}>
+              {saving && <Loader2 className="animate-spin" />}
               保存草稿
             </Button>
-            <Button type="primary" onClick={() => setPublishOpen(true)}>
-              发布
+            <Button onClick={() => setPublishOpen(true)}>发布</Button>
+            <Button variant="outline" onClick={() => navigate(`/configuration/${configurationId}/versions`)}>
+              版本历史
             </Button>
-            <Button onClick={() => navigate(`/configuration/${configurationId}/versions`)}>版本历史</Button>
-          </Space>
+          </div>
         </div>
       </Card>
 
       {/* 他人变更提示：仅本地未编辑时出现，点击刷新拉取最新内容 */}
       {remoteChanged && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="该配置已被他人修改，本地内容不是最新"
-          action={
-            <Button size="small" type="primary" onClick={() => load().catch(() => undefined)}>
-              刷新
-            </Button>
-          }
-        />
+        <Alert variant="warning" className="mb-4" action={
+          <Button size="sm" onClick={() => load().catch(() => undefined)}>
+            <RefreshCw />
+            刷新
+          </Button>
+        }>
+          <span>该配置已被他人修改，本地内容不是最新</span>
+        </Alert>
       )}
 
-      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+      <div className="flex items-start gap-4">
         {/* 左侧信息栏：字段口径对齐详情抽屉（维度、key、版本、人员、时间、说明），编辑器居右 */}
-        <Card bordered={false} size="small" title="配置信息" style={{ width: 320, flexShrink: 0 }}>
-          <Descriptions column={1} size="small" labelStyle={{ width: 88 }}>
-            <Descriptions.Item label="配置 ID">
-              <Typography.Text type="secondary" style={{ fontFamily: 'monospace' }}>
-                {configuration.id}
-              </Typography.Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="状态">
+        <Card className="w-80 shrink-0 p-4">
+          <p className="mb-2 text-sm font-semibold">配置信息</p>
+          <div className="flex flex-col">
+            <InfoRow label="配置 ID">
+              <span className="font-mono text-sm">{configuration.id}</span>
+            </InfoRow>
+            <InfoRow label="状态">
               <StatusTag status={configuration.status} />
-            </Descriptions.Item>
-            <Descriptions.Item label="命名空间">
+            </InfoRow>
+            <InfoRow label="命名空间">
               <DimensionCell
                 name={configuration.namespaceName}
                 dimensionKey={configuration.namespaceKey}
                 id={configuration.namespaceId}
-                color="geekblue"
+                tone="blue"
               />
-            </Descriptions.Item>
-            <Descriptions.Item label="环境">
+            </InfoRow>
+            <InfoRow label="环境">
               <DimensionCell
                 name={configuration.environmentName}
                 dimensionKey={configuration.environmentKey}
                 id={configuration.environmentId}
-                color="cyan"
+                tone="cyan"
               />
-            </Descriptions.Item>
-            <Descriptions.Item label="所属配置组">
+            </InfoRow>
+            <InfoRow label="所属配置组">
               <DimensionCell
                 name={configuration.groupName}
                 dimensionKey={configuration.groupKey}
                 id={configuration.groupId}
-                color="blue"
+                tone="sky"
               />
-            </Descriptions.Item>
-            <Descriptions.Item label="配置项 Key">
+            </InfoRow>
+            <InfoRow label="配置项 Key">
               <CopyableText value={configuration.configurationKey} code maxWidth={180} />
-            </Descriptions.Item>
-            <Descriptions.Item label="保存格式">
+            </InfoRow>
+            <InfoRow label="保存格式">
               <FormatTag format={configuration.format} />
-            </Descriptions.Item>
-            <Descriptions.Item label="当前 md5">
-              <Typography.Text code copyable={!!configuration.md5}>
-                {configuration.md5 ?? '-'}
-              </Typography.Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="生效版本">
+            </InfoRow>
+            <InfoRow label="当前 md5">
+              {configuration.md5 ? <CopyableText value={configuration.md5} code /> : <span className="text-muted-foreground">-</span>}
+            </InfoRow>
+            <InfoRow label="生效版本">
               {publishedVersion ? `v${publishedVersion.versionNumber}` : '从未发布'}
-            </Descriptions.Item>
-            <Descriptions.Item label="生效 md5">
-              <Typography.Text code copyable={!!publishedVersion?.md5}>
-                {publishedVersion?.md5 ?? '-'}
-              </Typography.Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="最新版本">
+            </InfoRow>
+            <InfoRow label="生效 md5">
+              {publishedVersion?.md5 ? <CopyableText value={publishedVersion.md5} code /> : <span className="text-muted-foreground">-</span>}
+            </InfoRow>
+            <InfoRow label="最新版本">
               {configuration.latestVersionNumber > 0 ? `v${configuration.latestVersionNumber}` : '-'}
-            </Descriptions.Item>
-            <Descriptions.Item label="发布时间">{formatTime(configuration.publishedAt)}</Descriptions.Item>
-            <Descriptions.Item label="创建人">{configuration.createdBy || '-'}</Descriptions.Item>
-            <Descriptions.Item label="创建时间">{formatTime(configuration.createdAt)}</Descriptions.Item>
-            <Descriptions.Item label="最后修改人">{configuration.updatedBy || '-'}</Descriptions.Item>
-            <Descriptions.Item label="更新时间">{formatTime(configuration.updatedAt)}</Descriptions.Item>
-            <Descriptions.Item label="标签">{configuration.tags || '-'}</Descriptions.Item>
-            <Descriptions.Item label="配置说明">{configuration.description || '-'}</Descriptions.Item>
-          </Descriptions>
+            </InfoRow>
+            <InfoRow label="发布时间">{formatTime(configuration.publishedAt)}</InfoRow>
+            <InfoRow label="创建人">{configuration.createdBy || '-'}</InfoRow>
+            <InfoRow label="创建时间">{formatTime(configuration.createdAt)}</InfoRow>
+            <InfoRow label="最后修改人">{configuration.updatedBy || '-'}</InfoRow>
+            <InfoRow label="更新时间">{formatTime(configuration.updatedAt)}</InfoRow>
+            <InfoRow label="标签">{configuration.tags || '-'}</InfoRow>
+            <InfoRow label="配置说明">{configuration.description || '-'}</InfoRow>
+          </div>
         </Card>
 
-        <Card bordered={false} style={{ flex: 1, minWidth: 0 }} bodyStyle={{ padding: 8 }}>
+        <Card className="min-w-0 flex-1 p-2">
           <Editor
             height="60vh"
             language={monacoLanguageMap[format] ?? 'plaintext'}
@@ -343,30 +353,38 @@ export default function ConfigurationEditor() {
       </div>
 
       {/* 发布弹窗：填写变更备注；发布与保存严格分离 */}
-      <Modal
-        title={`发布配置：${configuration.configurationKey}`}
-        open={publishOpen}
-        onOk={handlePublish}
-        onCancel={() => setPublishOpen(false)}
-        confirmLoading={publishing}
-        okText="发布"
-        destroyOnClose
-      >
-        {/* 发布的是服务端已保存内容：本地未保存修改不会包含在本次发布中 */}
-        {dirty && (
-          <Alert
-            type="warning"
-            showIcon
-            style={{ marginBottom: 12 }}
-            message="本地存在未保存的修改，本次发布仅包含已保存的草稿内容，请先保存"
-          />
-        )}
-        <Form form={publishForm} layout="vertical">
-          <Form.Item name="changeRemark" label="变更备注">
-            <Input.TextArea rows={3} placeholder="本次发布的变更说明（可选）" maxLength={200} showCount />
-          </Form.Item>
-        </Form>
-      </Modal>
+      <Dialog open={publishOpen} onOpenChange={setPublishOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>发布配置：{configuration.configurationKey}</DialogTitle>
+            <DialogDescription>发布后立即对客户端生效</DialogDescription>
+          </DialogHeader>
+          {/* 发布的是服务端已保存内容：本地未保存修改不会包含在本次发布中 */}
+          {dirty && (
+            <Alert variant="warning">
+              <span>本地存在未保存的修改，本次发布仅包含已保存的草稿内容，请先保存</span>
+            </Alert>
+          )}
+          <div className="flex flex-col gap-1.5">
+            <Textarea
+              rows={3}
+              maxLength={200}
+              placeholder="本次发布的变更说明（可选）"
+              value={publishRemark}
+              onChange={(e) => setPublishRemark(e.target.value)}
+            />
+            <span className="self-end text-xs text-muted-foreground">{publishRemark.length}/200</span>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPublishOpen(false)}>
+              取消
+            </Button>
+            <Button onClick={handlePublish} disabled={publishing}>
+              {publishing ? '发布中…' : '发布'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

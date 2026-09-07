@@ -1,8 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Button, DatePicker, Form, Input, Space, Table, Tag } from 'antd';
-import { AuditOutlined } from '@ant-design/icons';
-import type { ColumnsType } from 'antd/es/table';
-import type { Dayjs } from 'dayjs';
+import { ClipboardList } from 'lucide-react';
 import { listOperationLogs } from '@/api/operationLog';
 import type { OperationLogQuery, OperationLogResponse } from '@/api/types';
 import { useTableRequest } from '@/hooks/useTableRequest';
@@ -10,33 +7,24 @@ import { useColumnSettings } from '@/hooks/useColumnSettings';
 import PageContainer from '@/components/PageContainer';
 import ColumnSettingButton from '@/components/ColumnSettingButton';
 import DimensionCell from '@/components/DimensionCell';
-
-/** 检索表单字段：仅保留操作人与时间范围，时间范围为 Dayjs 区间，提交时转 ISO 字符串 */
-interface LogSearchValues {
-  operator?: string;
-  timeRange?: [Dayjs | null, Dayjs | null] | null;
-}
+import type { DataTableColumn } from '@/components/DataTable';
+import { DataTable } from '@/components/DataTable';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 /** 操作类型 → 中文文案/着色（与后端 OperationType 枚举对齐） */
-const operationMeta: Record<string, { label: string; color: string }> = {
-  CREATE: { label: '创建', color: 'blue' },
-  UPDATE: { label: '更新', color: 'gold' },
-  DELETE: { label: '删除', color: 'red' },
-  PUBLISH: { label: '发布', color: 'green' },
-  ROLLBACK: { label: '回滚', color: 'purple' },
-  OFFLINE: { label: '下线', color: 'default' },
+const operationMeta: Record<string, { label: string; badge: string }> = {
+  CREATE: { label: '创建', badge: 'border-transparent bg-sky-50 text-sky-700' },
+  UPDATE: { label: '更新', badge: 'border-transparent bg-amber-50 text-amber-700' },
+  DELETE: { label: '删除', badge: 'border-transparent bg-red-50 text-red-700' },
+  PUBLISH: { label: '发布', badge: 'border-transparent bg-emerald-50 text-emerald-700' },
+  ROLLBACK: { label: '回滚', badge: 'border-transparent bg-violet-50 text-violet-700' },
+  OFFLINE: { label: '下线', badge: '' },
 };
 
 /** ISO 时间字符串 → 本地可读格式 */
 const formatTime = (iso: string) => new Date(iso).toLocaleString('zh-CN', { hour12: false });
-
-/** 维度列统一展示：名称 Tag + key 两行（与各管理页一致）；未关联该维度（id 为空）显示 「-」 */
-const renderDimension = (
-  name: string | null | undefined,
-  key: string | null | undefined,
-  id: number | null,
-  color: string,
-) => (id == null ? '-' : <DimensionCell name={name} dimensionKey={key} id={id} color={color} />);
 
 /** detail 字段格式化：合法 JSON 缩进展示，否则原样输出 */
 const formatDetail = (detail: string) => {
@@ -47,11 +35,17 @@ const formatDetail = (detail: string) => {
   }
 };
 
-/** 操作审计页：操作人/时间范围检索表单 + 分页日志表格 + detail JSON 展开查看 */
-export default function OperationLogList() {
-  const [form] = Form.useForm<LogSearchValues>();
+/** datetime-local 输入值（YYYY-MM-DDTHH:mm）→ ISO 字符串，空串返回 undefined */
+const toIso = (value: string) => (value ? new Date(value).toISOString() : undefined);
 
-  // 生效中的查询参数：表单点「查询」或分页切换时更新（初值为空 = 全部）
+/** 操作审计页：操作人/时间范围检索 + 分页日志表格 + detail JSON 展开查看 */
+export default function OperationLogList() {
+  // 检索草稿：操作人与时间范围（datetime-local 原生输入，值为本地时间字符串）
+  const [operatorInput, setOperatorInput] = useState('');
+  const [startTimeInput, setStartTimeInput] = useState('');
+  const [endTimeInput, setEndTimeInput] = useState('');
+
+  // 生效中的查询参数：点「查询」或分页切换时更新（初值为空 = 全部）
   const [query, setQuery] = useState<OperationLogQuery>(() => ({
     pageIndex: 1,
     pageSize: 10,
@@ -60,136 +54,160 @@ export default function OperationLogList() {
   const fetcher = useCallback(() => listOperationLogs(query), [query]);
   const { data, loading } = useTableRequest(fetcher);
 
-  // 点「查询」：以表单值重建查询参数并回到第一页；时间区间转 ISO 字符串（[startTime, endTime)）
-  const handleSearch = (values: LogSearchValues) => {
-    const [start, end] = values.timeRange ?? [null, null];
+  // 点「查询」：以草稿值重建查询参数并回到第一页；时间区间转 ISO 字符串（[startTime, endTime)）
+  const handleSearch = () => {
     setQuery({
-      operator: values.operator?.trim() || undefined,
-      startTime: start ? start.toISOString() : undefined,
-      endTime: end ? end.toISOString() : undefined,
+      operator: operatorInput.trim() || undefined,
+      startTime: toIso(startTimeInput),
+      endTime: toIso(endTimeInput),
       pageIndex: 1,
       pageSize: query.pageSize,
     });
   };
 
   const handleReset = () => {
-    form.resetFields();
+    setOperatorInput('');
+    setStartTimeInput('');
+    setEndTimeInput('');
     setQuery({ pageIndex: 1, pageSize: query.pageSize });
   };
 
-  const columns: ColumnsType<OperationLogResponse> = [
+  /** 维度列统一展示：名称 Badge + key 两行（与各管理页一致）；未关联该维度（id 为空）显示「-」 */
+  const renderDimension = (
+    name: string | null | undefined,
+    key: string | null | undefined,
+    id: number | null,
+    tone: 'blue' | 'cyan' | 'sky' | 'purple',
+  ) => (id == null ? '-' : <DimensionCell name={name} dimensionKey={key} id={id} tone={tone} />);
+
+  const columns: DataTableColumn<OperationLogResponse>[] = [
     {
-      title: 'ID',
-      dataIndex: 'id',
       key: 'id',
+      title: 'ID',
       width: 80,
-      render: (v: number) => <span style={{ color: '#8c8c8c', fontFamily: 'monospace' }}>{v}</span>,
+      render: (record) => <span className="font-mono text-xs text-muted-foreground">{record.id}</span>,
     },
     {
-      title: '操作',
-      dataIndex: 'operation',
       key: 'operation',
+      title: '操作',
       width: 100,
-      render: (v: string) => {
-        const meta = operationMeta[v];
-        return meta ? <Tag color={meta.color}>{meta.label}</Tag> : <Tag>{v}</Tag>;
+      render: (record) => {
+        const meta = operationMeta[record.operation];
+        return meta ? (
+          meta.badge ? (
+            <Badge variant="outline" className={meta.badge}>
+              {meta.label}
+            </Badge>
+          ) : (
+            <Badge variant="secondary">{meta.label}</Badge>
+          )
+        ) : (
+          <Badge variant="outline">{record.operation}</Badge>
+        );
       },
     },
     {
-      title: '命名空间',
-      dataIndex: 'namespaceId',
       key: 'namespaceId',
+      title: '命名空间',
       width: 150,
-      render: (_: unknown, record) =>
-        renderDimension(record.namespaceName, record.namespaceKey, record.namespaceId, 'geekblue'),
+      render: (record) => renderDimension(record.namespaceName, record.namespaceKey, record.namespaceId, 'blue'),
     },
     {
-      title: '环境',
-      dataIndex: 'environmentId',
       key: 'environmentId',
+      title: '环境',
       width: 130,
-      render: (_: unknown, record) =>
-        renderDimension(record.environmentName, record.environmentKey, record.environmentId, 'cyan'),
+      render: (record) => renderDimension(record.environmentName, record.environmentKey, record.environmentId, 'cyan'),
     },
     {
-      title: '配置组',
-      dataIndex: 'groupId',
       key: 'groupId',
+      title: '配置组',
       width: 150,
-      render: (_: unknown, record) =>
-        renderDimension(record.groupName, record.groupKey, record.groupId, 'blue'),
+      render: (record) => renderDimension(record.groupName, record.groupKey, record.groupId, 'sky'),
     },
     {
-      title: '配置项',
-      dataIndex: 'configurationId',
       key: 'configurationId',
+      title: '配置项',
       width: 170,
       // 配置项无显示名称，只展示 key 行（关联不到时回退展示 #id）
-      render: (_: unknown, record) =>
-        renderDimension(null, record.configurationKey, record.configurationId, 'purple'),
+      render: (record) => renderDimension(null, record.configurationKey, record.configurationId, 'purple'),
     },
-    { title: '操作人', dataIndex: 'operator', key: 'operator', width: 120, render: (v: string | null) => v || '-' },
-    { title: 'IP', dataIndex: 'clientIpAddress', key: 'clientIpAddress', width: 140, render: (v: string | null) => v || '-' },
-    { title: '时间', dataIndex: 'createdAt', key: 'createdAt', width: 170, render: formatTime },
+    {
+      key: 'operator',
+      title: '操作人',
+      width: 120,
+      render: (record) => record.operator || '-',
+    },
+    {
+      key: 'clientIpAddress',
+      title: 'IP',
+      width: 140,
+      render: (record) => record.clientIpAddress || '-',
+    },
+    {
+      key: 'createdAt',
+      title: '时间',
+      width: 170,
+      render: (record) => formatTime(record.createdAt),
+    },
   ];
 
-  // 列配置：显隐/宽度按页面持久化；components 提供表头拖拽调宽
-  const { mergedColumns, components, columnMetas, setVisible, setWidth, reset } = useColumnSettings(
-    'operation-log-list',
-    columns,
-  );
+  // 列配置：显隐/宽度按页面持久化；表头拖拽调宽由 useColumnSettings 注入
+  const { mergedColumns, columnMetas, setVisible, setWidth, reset } = useColumnSettings('operation-log-list', columns);
 
   return (
     <PageContainer
       title="操作审计"
-      icon={<AuditOutlined />}
-      accentColor="#722ed1"
+      icon={<ClipboardList className="size-5" />}
       description="多维度检索配置变更与发布操作记录"
     >
-      {/* 筛选区：卡片内顶部一行，右侧列配置按钮，与表格之间留 16px 间距 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 16 }}>
-        <Form form={form} layout="inline" onFinish={handleSearch} style={{ rowGap: 12, flex: 1 }}>
-          <Form.Item name="operator" label="操作人">
-            <Input style={{ width: 160 }} placeholder="全部（模糊匹配）" allowClear />
-          </Form.Item>
-          <Form.Item name="timeRange" label="时间范围">
-            <DatePicker.RangePicker showTime allowClear />
-          </Form.Item>
-          <Form.Item>
-            <Space>
-              <Button type="primary" htmlType="submit">
-                查询
-              </Button>
-              <Button onClick={handleReset}>重置</Button>
-            </Space>
-          </Form.Item>
-        </Form>
+      {/* 筛选区：卡片内顶部一行，右侧列配置按钮 */}
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            className="w-40"
+            placeholder="操作人（模糊匹配）"
+            value={operatorInput}
+            onChange={(e) => setOperatorInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+          />
+          <Input
+            type="datetime-local"
+            className="w-56"
+            aria-label="开始时间"
+            value={startTimeInput}
+            onChange={(e) => setStartTimeInput(e.target.value)}
+          />
+          <span className="text-xs text-muted-foreground">至</span>
+          <Input
+            type="datetime-local"
+            className="w-56"
+            aria-label="结束时间"
+            value={endTimeInput}
+            onChange={(e) => setEndTimeInput(e.target.value)}
+          />
+          <Button onClick={handleSearch}>查询</Button>
+          <Button variant="outline" onClick={handleReset}>
+            重置
+          </Button>
+        </div>
         <ColumnSettingButton columnMetas={columnMetas} setVisible={setVisible} setWidth={setWidth} reset={reset} />
       </div>
-      <Table<OperationLogResponse>
-        rowKey="id"
-        size="middle"
+      <DataTable
+        rowKey={(record) => record.id}
         columns={mergedColumns}
-        components={components}
-        dataSource={data?.items ?? []}
+        data={data?.items ?? []}
         loading={loading}
-        // 窄窗口下横向滚动，避免内容越过容器
-        scroll={{ x: 'max-content' }}
         pagination={{
-          current: query.pageIndex,
-          pageSize: query.pageSize,
+          pageIndex: query.pageIndex,
+          pageSize: query.pageSize ?? 10,
           total: data?.total ?? 0,
-          showSizeChanger: true,
-          showTotal: (total) => `共 ${total} 条`,
           onChange: (pageIndex, pageSize) => setQuery((prev) => ({ ...prev, pageIndex, pageSize })),
         }}
         expandable={{
           rowExpandable: (record) => !!record.detail,
           // detail 变更详情：JSON 格式化后展示，非 JSON 内容原样兜底
-          expandedRowRender: (record) => (
-            <pre style={{ margin: 0, maxHeight: 320, overflow: 'auto', fontSize: 12 }}>
-              {formatDetail(record.detail ?? '')}
-            </pre>
+          expandedRender: (record) => (
+            <pre className="m-0 max-h-80 overflow-auto font-mono text-xs">{formatDetail(record.detail ?? '')}</pre>
           ),
         }}
       />

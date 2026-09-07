@@ -1,38 +1,46 @@
 import { useCallback, useState } from 'react';
-import {
-  Button,
-  Divider,
-  Form,
-  Input,
-  InputNumber,
-  Popconfirm,
-  Select,
-  Space,
-  Table,
-  Tag,
-  message,
-} from 'antd';
-import { DeploymentUnitOutlined, PlusOutlined } from '@ant-design/icons';
-import type { ColumnsType } from 'antd/es/table';
+import { toast } from 'sonner';
+import { Plus, Server } from 'lucide-react';
 import { createEnvironment, deleteEnvironment, listEnvironments, updateEnvironment } from '@/api/environment';
 import { listNamespaces } from '@/api/namespace';
 import type { EnvironmentResponse } from '@/api/types';
 import { useTableRequest } from '@/hooks/useTableRequest';
 import { useColumnSettings } from '@/hooks/useColumnSettings';
+import type { DataTableColumn } from '@/components/DataTable';
+import { DataTable } from '@/components/DataTable';
 import PageContainer from '@/components/PageContainer';
 import FormDrawer from '@/components/FormDrawer';
+import FormField from '@/components/FormField';
+import FilterSelect from '@/components/FilterSelect';
 import CopyableText from '@/components/CopyableText';
 import DimensionCell from '@/components/DimensionCell';
 import ColumnSettingButton from '@/components/ColumnSettingButton';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 /** 抽屉表单字段：新建含命名空间与 key，编辑时两者只读展示不提交 */
 interface EnvironmentFormValues {
-  namespaceId: number;
+  namespaceId?: number;
   environmentKey: string;
   environmentName: string;
-  description?: string;
+  description: string;
   sortOrder: number;
 }
+
+const emptyForm: EnvironmentFormValues = { environmentKey: '', environmentName: '', description: '', sortOrder: 0 };
 
 /** ISO 时间字符串 → 本地可读格式 */
 const formatTime = (iso: string) => new Date(iso).toLocaleString('zh-CN', { hour12: false });
@@ -55,8 +63,11 @@ export default function EnvironmentList() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   // 当前编辑的记录，null 表示新建
   const [editing, setEditing] = useState<EnvironmentResponse | null>(null);
+  const [form, setForm] = useState<EnvironmentFormValues>(emptyForm);
+  const [errors, setErrors] = useState<Partial<Record<keyof EnvironmentFormValues, string>>>({});
+  const [dirty, setDirty] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [form] = Form.useForm<EnvironmentFormValues>();
+  const [deleteTarget, setDeleteTarget] = useState<EnvironmentResponse | null>(null);
 
   const namespaceOptions = (namespaces ?? []).map((n) => ({ label: n.namespaceName, value: n.id }));
 
@@ -82,52 +93,68 @@ export default function EnvironmentList() {
     setKeyword('');
   };
 
+  const setField = <K extends keyof EnvironmentFormValues>(key: K, value: EnvironmentFormValues[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+    setDirty(true);
+    setErrors((prev) => ({ ...prev, [key]: undefined }));
+  };
+
   const openCreate = () => {
     setEditing(null);
-    form.resetFields();
-    form.setFieldsValue({ sortOrder: 0 });
+    setForm({ ...emptyForm, sortOrder: 0 });
+    setErrors({});
+    setDirty(false);
     setDrawerOpen(true);
   };
 
   const openEdit = (record: EnvironmentResponse) => {
     setEditing(record);
-    form.setFieldsValue({
+    setForm({
       namespaceId: record.namespaceId,
       environmentKey: record.environmentKey,
       environmentName: record.environmentName,
-      description: record.description ?? undefined,
+      description: record.description ?? '',
       sortOrder: record.sortOrder,
     });
+    setErrors({});
+    setDirty(false);
     setDrawerOpen(true);
+  };
+
+  /** 表单校验：新建要求选命名空间；名称/Key 必填；排序值为合法数字 */
+  const validate = (): EnvironmentFormValues | null => {
+    const next: Partial<Record<keyof EnvironmentFormValues, string>> = {};
+    if (!editing && form.namespaceId === undefined) next.namespaceId = '请选择命名空间';
+    if (!form.environmentName.trim()) next.environmentName = '请输入环境名称';
+    if (!editing && !form.environmentKey.trim()) next.environmentKey = '请输入环境 Key';
+    if (!Number.isFinite(form.sortOrder)) next.sortOrder = '请输入排序值';
+    setErrors(next);
+    return Object.keys(next).length ? null : form;
   };
 
   // 新建/编辑提交：错误提示由 http.ts 拦截器统一弹出，这里只处理成功分支
   const handleSubmit = async () => {
-    let values: EnvironmentFormValues;
-    try {
-      values = await form.validateFields();
-    } catch {
-      return; // 表单校验失败，AntD 已在字段上展示错误
-    }
+    const values = validate();
+    if (!values) return;
     setSubmitting(true);
     try {
       if (editing) {
         await updateEnvironment(editing.id, {
           environmentName: values.environmentName,
-          description: values.description ?? null,
+          description: values.description || null,
           sortOrder: values.sortOrder,
           status: editing.status, // 状态由列表行内切换维护，编辑抽屉不改
         });
-        message.success('更新成功');
+        toast.success('更新成功');
       } else {
         await createEnvironment({
-          namespaceId: values.namespaceId,
+          namespaceId: values.namespaceId!,
           environmentKey: values.environmentKey,
           environmentName: values.environmentName,
-          description: values.description ?? null,
+          description: values.description || null,
           sortOrder: values.sortOrder,
         });
-        message.success('创建成功');
+        toast.success('创建成功');
       }
       setDrawerOpen(false);
       reload();
@@ -148,135 +175,144 @@ export default function EnvironmentList() {
         sortOrder: record.sortOrder,
         status: next,
       });
-      message.success(next === 1 ? '已启用' : '已禁用');
+      toast.success(next === 1 ? '已启用' : '已禁用');
       reload();
     } catch {
       // 接口错误已由拦截器提示
     }
   };
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
     try {
-      await deleteEnvironment(id);
-      message.success('删除成功');
+      await deleteEnvironment(deleteTarget.id);
+      toast.success('删除成功');
       reload();
     } catch {
       // 接口错误已由拦截器提示
+    } finally {
+      setDeleteTarget(null);
     }
   };
 
-  const columns: ColumnsType<EnvironmentResponse> = [
+  const columns: DataTableColumn<EnvironmentResponse>[] = [
     {
-      title: 'ID',
-      dataIndex: 'id',
       key: 'id',
+      title: 'ID',
       width: 80,
-      render: (v: number) => <span style={{ color: '#8c8c8c', fontFamily: 'monospace' }}>{v}</span>,
+      render: (record) => <span className="font-mono text-xs text-muted-foreground">{record.id}</span>,
     },
     {
-      title: '所属命名空间',
-      dataIndex: 'namespaceId',
       key: 'namespaceId',
+      title: '所属命名空间',
       width: 170,
-      // 后端联查返回 key/名称；共享 DimensionCell（首行名称 Tag、次行 code 框展示 key，点击复制；key 缺失兜底显 #id）
-      render: (_: unknown, record) => (
-        <DimensionCell name={record.namespaceName} dimensionKey={record.namespaceKey} id={record.namespaceId} color="geekblue" />
+      // 后端联查返回 key/名称；共享 DimensionCell（首行名称 Badge、次行 code 框展示 key，点击复制；key 缺失兜底显 #id）
+      render: (record) => (
+        <DimensionCell name={record.namespaceName} dimensionKey={record.namespaceKey} id={record.namespaceId} tone="blue" />
       ),
     },
-    { title: '名称', dataIndex: 'environmentName', key: 'environmentName' },
-    { title: 'Key', dataIndex: 'environmentKey', key: 'environmentKey', render: (v: string) => <CopyableText value={v} code /> },
-    { title: '描述', dataIndex: 'description', key: 'description', render: (v: string | null) => v || '-' },
-    { title: '排序', dataIndex: 'sortOrder', key: 'sortOrder', width: 80 },
+    { key: 'environmentName', title: '名称' },
     {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      width: 90,
-      render: (v: number) => (v === 1 ? <Tag color="green">启用</Tag> : <Tag>禁用</Tag>),
+      key: 'environmentKey',
+      title: 'Key',
+      render: (record) => <CopyableText value={record.environmentKey} code />,
     },
-    { title: '创建时间', dataIndex: 'createdAt', key: 'createdAt', width: 170, render: formatTime },
-    { title: '更新时间', dataIndex: 'updatedAt', key: 'updatedAt', width: 170, render: formatTime },
     {
-      title: '操作',
+      key: 'description',
+      title: '描述',
+      render: (record) => record.description || '-',
+    },
+    { key: 'sortOrder', title: '排序', width: 80 },
+    {
+      key: 'status',
+      title: '状态',
+      width: 90,
+      render: (record) =>
+        record.status === 1 ? (
+          <Badge variant="outline" className="border-transparent bg-emerald-50 text-emerald-700">启用</Badge>
+        ) : (
+          <Badge variant="secondary">禁用</Badge>
+        ),
+    },
+    { key: 'createdAt', title: '创建时间', width: 170, render: (record) => formatTime(record.createdAt) },
+    { key: 'updatedAt', title: '更新时间', width: 170, render: (record) => formatTime(record.updatedAt) },
+    {
       key: 'action',
-      width: 180,
-      render: (_, record) => (
-        <Space size={0} split={<Divider type="vertical" />}>
-          <Button type="link" size="small" onClick={() => openEdit(record)}>
+      title: '操作',
+      width: 190,
+      render: (record) => (
+        <div className="flex items-center gap-0.5">
+          <Button variant="link" size="sm" className="h-7 px-1.5" onClick={() => openEdit(record)}>
             编辑
           </Button>
+          <span className="mx-0.5 h-3 w-px bg-border" />
           <Button
-            type="link"
-            size="small"
-            danger={record.status === 1}
+            variant="link"
+            size="sm"
+            className={`h-7 px-1.5 ${record.status === 1 ? 'text-destructive hover:text-destructive' : ''}`}
             onClick={() => handleToggleStatus(record)}
           >
             {record.status === 1 ? '禁用' : '启用'}
           </Button>
-          <Popconfirm title="确定删除该环境？" onConfirm={() => handleDelete(record.id)}>
-            <Button type="link" size="small" danger>
-              删除
-            </Button>
-          </Popconfirm>
-        </Space>
+          <span className="mx-0.5 h-3 w-px bg-border" />
+          <Button
+            variant="link"
+            size="sm"
+            className="h-7 px-1.5 text-destructive hover:text-destructive"
+            onClick={() => setDeleteTarget(record)}
+          >
+            删除
+          </Button>
+        </div>
       ),
     },
   ];
 
-  // 列配置：显隐/宽度按页面持久化，操作列强制显示；components 提供表头拖拽调宽
-  const { mergedColumns, components, columnMetas, setVisible, setWidth, reset } = useColumnSettings(
-    'environment-list',
-    columns,
-  );
+  // 列配置：显隐/宽度按页面持久化，操作列强制显示；表头拖拽调宽由 useColumnSettings 注入
+  const { mergedColumns, columnMetas, setVisible, setWidth, reset } = useColumnSettings('environment-list', columns);
 
   return (
     <PageContainer
       title="环境管理"
-      icon={<DeploymentUnitOutlined />}
-      accentColor="#13c2c2"
+      icon={<Server className="size-5" />}
       description="管理各命名空间下的部署环境，支持排序与启用状态控制"
       extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+        <Button onClick={openCreate}>
+          <Plus />
           新建环境
         </Button>
       }
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
-        <Space wrap>
-          <Select
-            allowClear
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <FilterSelect
             placeholder="全部命名空间"
-            style={{ width: 200 }}
+            className="w-52"
             value={filterNamespaceId}
             options={namespaceOptions}
-            onChange={(v?: number) => setFilterNamespaceId(v)}
-            onDropdownVisibleChange={(open) => open && reloadNamespaces()}
+            onChange={setFilterNamespaceId}
+            onOpenChange={(open) => open && reloadNamespaces()}
           />
           <Input
-            allowClear
+            className="w-60"
             placeholder="搜索名称 / Key"
-            style={{ width: 240 }}
             value={keywordInput}
             onChange={(e) => setKeywordInput(e.target.value)}
-            onPressEnter={handleSearch}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
           />
-          <Button type="primary" onClick={handleSearch}>
-            查询
+          <Button onClick={handleSearch}>查询</Button>
+          <Button variant="outline" onClick={handleResetFilter}>
+            重置
           </Button>
-          <Button onClick={handleResetFilter}>重置</Button>
-        </Space>
+        </div>
         <ColumnSettingButton columnMetas={columnMetas} setVisible={setVisible} setWidth={setWidth} reset={reset} />
       </div>
-      <Table<EnvironmentResponse>
-        rowKey="id"
-        size="middle"
+      <DataTable
+        rowKey={(record) => record.id}
         columns={mergedColumns}
-        components={components}
-        dataSource={filteredData}
+        data={filteredData}
         loading={loading}
-        // 窄窗口下横向滚动，避免内容越过容器
-        scroll={{ x: 'max-content' }}
-        pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
+        pagination={{ pageSize: 10 }}
       />
       <FormDrawer
         title={editing ? '编辑环境' : '新建环境'}
@@ -284,50 +320,82 @@ export default function EnvironmentList() {
         onClose={() => setDrawerOpen(false)}
         onSubmit={handleSubmit}
         loading={submitting}
-        form={form}
+        dirty={dirty}
         okText={editing ? '保存' : '创建'}
       >
-        <Form form={form} layout="vertical">
-          <Form.Item
-            name="namespaceId"
-            label="命名空间"
-            rules={[{ required: true, message: '请选择命名空间' }]}
-          >
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSubmit();
+          }}
+        >
+          <FormField label="命名空间" required error={errors.namespaceId}>
             <Select
-              placeholder="请选择命名空间"
-              options={namespaceOptions}
+              value={form.namespaceId !== undefined ? String(form.namespaceId) : undefined}
+              onValueChange={(v) => setField('namespaceId', Number(v))}
               disabled={!!editing}
-              showSearch
-              optionFilterProp="label"
-              onDropdownVisibleChange={(open) => open && reloadNamespaces()}
+              onOpenChange={(open) => open && reloadNamespaces()}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="请选择命名空间" />
+              </SelectTrigger>
+              <SelectContent>
+                {namespaceOptions.map((option) => (
+                  <SelectItem key={option.value} value={String(option.value)}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+          <FormField label="名称" required error={errors.environmentName}>
+            <Input
+              placeholder="如 开发环境"
+              value={form.environmentName}
+              onChange={(e) => setField('environmentName', e.target.value)}
             />
-          </Form.Item>
-          <Form.Item
-            name="environmentName"
-            label="名称"
-            rules={[{ required: true, message: '请输入环境名称' }]}
-          >
-            <Input placeholder="如 开发环境" />
-          </Form.Item>
-          <Form.Item
-            name="environmentKey"
-            label="Key"
-            rules={[{ required: true, message: '请输入环境 Key' }]}
-          >
-            <Input placeholder="如 dev / test / staging / prod" disabled={!!editing} />
-          </Form.Item>
-          <Form.Item
-            name="sortOrder"
-            label="排序值"
-            rules={[{ required: true, message: '请输入排序值' }]}
-          >
-            <InputNumber style={{ width: '100%' }} placeholder="数值越小越靠前" />
-          </Form.Item>
-          <Form.Item name="description" label="描述">
-            <Input.TextArea rows={3} placeholder="可选" />
-          </Form.Item>
-        </Form>
+          </FormField>
+          <FormField label="Key" required error={errors.environmentKey}>
+            <Input
+              placeholder="如 dev / test / staging / prod"
+              value={form.environmentKey}
+              disabled={!!editing}
+              onChange={(e) => setField('environmentKey', e.target.value)}
+            />
+          </FormField>
+          <FormField label="排序值" required error={errors.sortOrder}>
+            <Input
+              type="number"
+              placeholder="数值越小越靠前"
+              value={Number.isFinite(form.sortOrder) ? form.sortOrder : ''}
+              onChange={(e) => setField('sortOrder', e.target.value === '' ? Number.NaN : Number(e.target.value))}
+            />
+          </FormField>
+          <FormField label="描述">
+            <Textarea
+              rows={3}
+              placeholder="可选"
+              value={form.description}
+              onChange={(e) => setField('description', e.target.value)}
+            />
+          </FormField>
+        </form>
       </FormDrawer>
+
+      {/* 删除二次确认 */}
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>确定删除该环境？</AlertDialogTitle>
+            <AlertDialogDescription>删除为软删除；存在未删除的下级资源时将被拒绝</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete}>删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </PageContainer>
   );
 }

@@ -32,7 +32,7 @@ namespace（命名空间）→ environment（环境）→ configuration_group（
 | 后端 | ASP.NET Core Web API（`net10.0`，单项目 `k_config_center/`） | SDK 10.x |
 | ORM | SqlSugar（PostgreSQL，DbFirst 手工建表，**禁 CodeFirst**） | 5.1.4 |
 | 数据库 | PostgreSQL（部分唯一索引 / JSONB / timestamptz） | 14+ |
-| 前端 | React 18 + TypeScript + Ant Design 5 + Vite（`web/`，独立 Node 工程，不进 .sln） | Node 18+ |
+| 前端 | React 18 + TypeScript + Tailwind CSS v4 + shadcn/ui + Vite（`web/`，独立 Node 工程，不进 .sln） | Node 18+ |
 
 ## 3. 常用命令（在仓库根执行）
 
@@ -93,7 +93,7 @@ scripts/                          # check.sh / dev.sh / build.sh
 
 1. **API 层**：新接口在 `web/src/api/<资源>.ts` 用 `request.get/post/put/delete` 封装；类型放 `api/types.ts`。拦截器已解包 `data` 并统一弹错，页面代码只处理成功路径。
 2. **写操作带操作人**：非 GET 请求自动注入 `X-Operator`（localStorage `operator`，缺省 `portal`），无需页面手动处理。
-3. **新页面**：组件放 `pages/<资源>/`，路由注册进 `router/index.tsx`；UI 用 Ant Design 5 组件 + 中文 locale（入口已配 `zhCN`）。
+3. **新页面**：组件放 `pages/<资源>/`，路由注册进 `router/index.tsx`；UI 用 shadcn/ui 组件（`components/ui/`，缺的按 shadcn 惯例新增）+ Tailwind 工具类，图标用 lucide-react，轻提示用 sonner 的 `toast`（文案本身中文，无 locale 配置）。
 4. **构建即检查**：`npm run build` 含 `tsc --noEmit`，类型错误=构建失败，不得用 `any` 糊弄过去。
 5. 路径别名 `@` → `web/src`（vite.config.ts 与 tsconfig paths 保持一致）。
 

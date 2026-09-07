@@ -1,6 +1,16 @@
-import type { ReactNode } from 'react';
-import { Button, Drawer, Modal, Space } from 'antd';
-import type { FormInstance } from 'antd';
+import { useState, type ReactNode } from 'react';
+import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Button } from '@/components/ui/button';
 
 interface FormDrawerProps {
   title: string;
@@ -8,7 +18,8 @@ interface FormDrawerProps {
   onClose: () => void;
   onSubmit: () => void | Promise<void>;
   loading?: boolean;
-  form: FormInstance;
+  /** 表单是否有未保存修改（由受控表单方维护），有修改时关闭需二次确认 */
+  dirty?: boolean;
   width?: number;
   okText?: string;
   children: ReactNode;
@@ -16,9 +27,8 @@ interface FormDrawerProps {
 
 /**
  * 通用表单抽屉：右侧滑出，footer 固定为「取消 + 主按钮（loading）」。
- * 防误触约定：maskClosable 关闭，X / 取消统一走 handleClose——
- * 表单已被修改（form.isFieldsTouched()）时弹二次确认，避免误关丢失未保存内容；
- * 未修改则直接关闭。destroyOnClose 保证每次打开表单为全新实例。
+ * 防误触约定：点遮罩不关闭；X / 取消 / Esc 统一走 handleRequestClose——
+ * 表单已被修改（dirty）时弹二次确认，避免误关丢失未保存内容；未修改则直接关闭。
  */
 export default function FormDrawer({
   title,
@@ -26,45 +36,65 @@ export default function FormDrawer({
   onClose,
   onSubmit,
   loading,
-  form,
+  dirty,
   width = 480,
   okText = '确定',
   children,
 }: FormDrawerProps) {
-  // X 与取消共用：有未保存修改时二次确认，否则直接关闭
-  const handleClose = () => {
-    if (form.isFieldsTouched()) {
-      Modal.confirm({
-        title: '确认关闭？',
-        content: '表单内容尚未保存，关闭后将丢失',
-        okText: '关闭',
-        cancelText: '继续编辑',
-        onOk: onClose,
-      });
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // 关闭请求（X / 取消 / Esc）：有未保存修改时二次确认，否则直接关闭
+  const handleRequestClose = () => {
+    if (dirty) {
+      setConfirmOpen(true);
       return;
     }
     onClose();
   };
 
   return (
-    <Drawer
-      title={title}
+    <Sheet
       open={open}
-      onClose={handleClose}
-      placement="right"
-      width={width}
-      maskClosable={false}
-      destroyOnClose
-      footer={
-        <Space style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <Button onClick={handleClose}>取消</Button>
-          <Button type="primary" loading={loading} onClick={onSubmit}>
+      onOpenChange={(next) => {
+        // 仅处理关闭动作（打开由父组件控制）；点遮罩不关闭，对齐原 maskClosable=false
+        if (!next) handleRequestClose();
+      }}
+    >
+      <SheetContent
+        style={{ maxWidth: width }}
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onEscapeKeyDown={(event) => {
+          event.preventDefault();
+          handleRequestClose();
+        }}
+      >
+        <SheetHeader>
+          <SheetTitle>{title}</SheetTitle>
+        </SheetHeader>
+        <div className="flex-1 overflow-y-auto">{children}</div>
+        <SheetFooter>
+          <Button variant="outline" onClick={handleRequestClose}>
+            取消
+          </Button>
+          <Button onClick={onSubmit} disabled={loading}>
             {okText}
           </Button>
-        </Space>
-      }
-    >
-      {children}
-    </Drawer>
+        </SheetFooter>
+      </SheetContent>
+
+      {/* 关闭二次确认：叠在抽屉之上 */}
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认关闭？</AlertDialogTitle>
+            <AlertDialogDescription>表单内容尚未保存，关闭后将丢失</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>继续编辑</AlertDialogCancel>
+            <AlertDialogAction onClick={onClose}>关闭</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Sheet>
   );
 }

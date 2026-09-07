@@ -1,27 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  Button,
-  Dropdown,
-  Form,
-  Input,
-  Modal,
-  Select,
-  Space,
-  Table,
-  Tag,
-  Tooltip,
-  Typography,
-  message,
-} from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import {
-  EditOutlined,
-  ExclamationCircleOutlined,
-  EyeOutlined,
-  MoreOutlined,
-  PlusOutlined,
-  SettingOutlined,
-} from '@ant-design/icons';
+import { toast } from 'sonner';
+import { Edit, Eye, MoreHorizontal, Plus, Search, Settings2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   createConfiguration,
@@ -45,15 +24,49 @@ import StatusTag from '@/components/StatusTag';
 import FormatSelect from '@/components/FormatSelect';
 import FormatTag from '@/components/FormatTag';
 import PageContainer from '@/components/PageContainer';
+import FormField from '@/components/FormField';
+import FilterSelect from '@/components/FilterSelect';
 import ContentPreview from '@/components/ContentPreview';
 import CopyableText from '@/components/CopyableText';
 import FormDrawer from '@/components/FormDrawer';
 import ColumnSettingButton from '@/components/ColumnSettingButton';
 import DimensionCell from '@/components/DimensionCell';
 import ConfigurationDetailDrawer from '@/pages/configuration/ConfigurationDetailDrawer';
+import type { DataTableColumn } from '@/components/DataTable';
+import { DataTable } from '@/components/DataTable';
 import { useTableRequest } from '@/hooks/useTableRequest';
 import { useColumnSettings } from '@/hooks/useColumnSettings';
 import { getFormatter } from '@/utils/formatters';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 /** 时间字段本地化展示（ISO 8601 → 本地时间字符串） */
 const formatTime = (value: string | null) => (value ? new Date(value).toLocaleString() : '-');
@@ -65,19 +78,16 @@ const statusOptions: { value: ConfigStatus; label: string }[] = [
   { value: 'OFFLINE', label: '已下线' },
 ];
 
-/** 维度列渲染：共享 DimensionCell（首行名称 Tag、次行 code 框展示业务 key，点击复制；key 缺失时兜底显 #id） */
-const renderDimension = (name: string | null | undefined, key: string | null | undefined, id: number, color: string) => (
-  <DimensionCell name={name} dimensionKey={key} id={id} color={color} />
-);
-
 /** 新建配置表单值 */
 interface CreateFormValues {
-  groupId: number;
+  groupId?: number;
   configurationKey: string;
   format: ConfigFormat;
-  content?: string;
-  description?: string;
+  content: string;
+  description: string;
 }
+
+const emptyCreateForm: CreateFormValues = { configurationKey: '', format: 'text', content: '', description: '' };
 
 /**
  * 配置项列表页：命名空间/环境/配置组三级级联 + 状态 + Key 关键字组合筛选（全可选，点「查询」手动生效）；
@@ -106,20 +116,24 @@ export default function ConfigurationList() {
   const [environments, setEnvironments] = useState<EnvironmentResponse[]>([]);
   const [groups, setGroups] = useState<ConfigurationGroupResponse[]>([]);
 
-  // 发布弹窗：当前待发布的配置项
+  // 发布弹窗：当前待发布的配置项 + 变更备注草稿
   const [publishTarget, setPublishTarget] = useState<ConfigurationResponse | null>(null);
-  const [publishForm] = Form.useForm<{ changeRemark?: string }>();
+  const [publishRemark, setPublishRemark] = useState('');
   const [publishing, setPublishing] = useState(false);
 
   // 新建配置抽屉
   const [createOpen, setCreateOpen] = useState(false);
-  const [createForm] = Form.useForm<CreateFormValues>();
+  const [createForm, setCreateForm] = useState<CreateFormValues>(emptyCreateForm);
+  const [createErrors, setCreateErrors] = useState<Partial<Record<keyof CreateFormValues, string>>>({});
+  const [createDirty, setCreateDirty] = useState(false);
   const [creating, setCreating] = useState(false);
-  // 监听新建表单格式选择：canFormat 的格式才展示「校验并格式化」按钮
-  const createFormat = Form.useWatch('format', createForm);
 
   // 配置详情抽屉：非空即打开
   const [detailRecord, setDetailRecord] = useState<ConfigurationResponse | null>(null);
+
+  // 下线/删除确认目标
+  const [offlineTarget, setOfflineTarget] = useState<ConfigurationResponse | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ConfigurationResponse | null>(null);
 
   // 下拉数据源请求序列号（参考 useTableRequest 的 requestIdRef）：只接受最新一次请求的结果，
   // 避免 useEffect 自动拉取与下拉展开刷新两通路乱序时旧响应覆盖新响应
@@ -205,20 +219,14 @@ export default function ConfigurationList() {
   /** 发布确认：填变更备注后调用发布接口 */
   const handlePublish = async () => {
     if (!publishTarget) return;
-    let values: { changeRemark?: string };
-    try {
-      values = await publishForm.validateFields();
-    } catch {
-      return; // 校验失败，错误已由表单项展示
-    }
     setPublishing(true);
     try {
       const result = await publishConfiguration(publishTarget.id, {
-        changeRemark: values.changeRemark || null,
+        changeRemark: publishRemark || null,
       });
-      message.success(`发布成功，版本号 v${result.versionNumber}`);
+      toast.success(`发布成功，版本号 v${result.versionNumber}`);
       setPublishTarget(null);
-      publishForm.resetFields();
+      setPublishRemark('');
       reload();
     } catch {
       // 错误提示已由 http.ts 拦截器统一弹出
@@ -228,47 +236,58 @@ export default function ConfigurationList() {
   };
 
   /** 下线：仅 PUBLISHED 状态可下线 */
-  const handleOffline = async (record: ConfigurationResponse) => {
+  const handleOffline = async () => {
+    if (!offlineTarget) return;
     try {
-      await offlineConfiguration(record.id);
-      message.success('下线成功');
+      await offlineConfiguration(offlineTarget.id);
+      toast.success('下线成功');
       reload();
     } catch {
       // 错误提示已由拦截器统一处理
+    } finally {
+      setOfflineTarget(null);
     }
   };
 
   /** 删除（后端软删除） */
-  const handleDelete = async (record: ConfigurationResponse) => {
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
     try {
-      await deleteConfiguration(record.id);
-      message.success('删除成功');
+      await deleteConfiguration(deleteTarget.id);
+      toast.success('删除成功');
       reload();
     } catch {
       // 错误提示已由拦截器统一处理
+    } finally {
+      setDeleteTarget(null);
     }
+  };
+
+  /** 新建表单字段更新：置脏并清对应错误 */
+  const setCreateField = <K extends keyof CreateFormValues>(key: K, value: CreateFormValues[K]) => {
+    setCreateForm((prev) => ({ ...prev, [key]: value }));
+    setCreateDirty(true);
+    setCreateErrors((prev) => ({ ...prev, [key]: undefined }));
   };
 
   /** 新建配置确认 */
   const handleCreate = async () => {
-    let values: CreateFormValues;
-    try {
-      values = await createForm.validateFields();
-    } catch {
-      return; // 校验失败，错误已由表单项展示
-    }
+    const next: Partial<Record<keyof CreateFormValues, string>> = {};
+    if (createForm.groupId === undefined) next.groupId = '请选择配置组';
+    if (!createForm.configurationKey.trim()) next.configurationKey = '请输入配置项 Key';
+    setCreateErrors(next);
+    if (Object.keys(next).length) return;
     setCreating(true);
     try {
       await createConfiguration({
-        groupId: values.groupId,
-        configurationKey: values.configurationKey,
-        format: values.format,
-        content: values.content || null,
-        description: values.description || null,
+        groupId: createForm.groupId!,
+        configurationKey: createForm.configurationKey,
+        format: createForm.format,
+        content: createForm.content || null,
+        description: createForm.description || null,
       });
-      message.success('新建配置成功');
+      toast.success('新建配置成功');
       setCreateOpen(false);
-      createForm.resetFields();
       // 列表支持跨组展示，新建后直接刷新即可
       reload();
     } catch {
@@ -280,230 +299,205 @@ export default function ConfigurationList() {
 
   /** 新建表单「校验并格式化」：按当前格式取注册表校验，失败提示具体错误，通过则美化回写 */
   const handleFormatContent = () => {
-    const content = createForm.getFieldValue('content') as string | undefined;
-    if (!content?.trim()) {
-      message.warning('配置值为空');
+    if (!createForm.content.trim()) {
+      toast.warning('配置值为空');
       return;
     }
-    const formatter = getFormatter(createFormat ?? 'text');
-    const error = formatter.validate(content);
+    const formatter = getFormatter(createForm.format);
+    const error = formatter.validate(createForm.content);
     if (error) {
-      message.error(`${createFormat} 校验失败：${error}`);
+      toast.error(`${createForm.format} 校验失败：${error}`);
       return;
     }
-    createForm.setFieldsValue({ content: formatter.format(content) });
-    message.success(`${createFormat} 校验通过，已格式化`);
+    setCreateForm((prev) => ({ ...prev, content: formatter.format(prev.content) }));
+    toast.success(`${createForm.format} 校验通过，已格式化`);
   };
 
-  const columns: ColumnsType<ConfigurationResponse> = [
+  const columns: DataTableColumn<ConfigurationResponse>[] = [
     {
-      title: 'ID',
-      dataIndex: 'id',
       key: 'id',
+      title: 'ID',
       width: 80,
-      render: (id: number) => (
-        <Typography.Text type="secondary" style={{ fontFamily: 'monospace', fontSize: 12 }} code>
-          {id}
-        </Typography.Text>
+      render: (record) => <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">{record.id}</span>,
+    },
+    {
+      key: 'namespaceName',
+      title: '命名空间',
+      width: 150,
+      render: (record) => (
+        <DimensionCell name={record.namespaceName} dimensionKey={record.namespaceKey} id={record.namespaceId} tone="blue" />
       ),
     },
     {
-      title: '命名空间',
-      dataIndex: 'namespaceName',
-      key: 'namespaceName',
-      width: 150,
-      ellipsis: true,
-      render: (_, record) => renderDimension(record.namespaceName, record.namespaceKey, record.namespaceId, 'geekblue'),
-    },
-    {
-      title: '环境',
-      dataIndex: 'environmentName',
       key: 'environmentName',
+      title: '环境',
       width: 130,
-      ellipsis: true,
-      render: (_, record) => renderDimension(record.environmentName, record.environmentKey, record.environmentId, 'cyan'),
+      render: (record) => (
+        <DimensionCell name={record.environmentName} dimensionKey={record.environmentKey} id={record.environmentId} tone="cyan" />
+      ),
     },
     {
-      title: '所属配置组',
-      dataIndex: 'groupName',
       key: 'groupName',
+      title: '所属配置组',
       width: 150,
-      ellipsis: true,
-      render: (_, record) => renderDimension(record.groupName, record.groupKey, record.groupId, 'blue'),
+      render: (record) => (
+        <DimensionCell name={record.groupName} dimensionKey={record.groupKey} id={record.groupId} tone="sky" />
+      ),
     },
     {
-      title: '配置项 Key',
-      dataIndex: 'configurationKey',
       key: 'configurationKey',
+      title: '配置项 Key',
       width: 220,
-      render: (key: string) => <CopyableText value={key} code maxWidth={200} />,
+      render: (record) => <CopyableText value={record.configurationKey} code maxWidth={200} />,
     },
     {
-      title: '内容',
-      dataIndex: 'content',
       key: 'content',
+      title: '内容',
       width: 240,
-      render: (_, record) => <ContentPreview content={record.content} format={record.format} />,
+      render: (record) => <ContentPreview content={record.content} format={record.format} />,
     },
     {
-      title: '格式',
-      dataIndex: 'format',
       key: 'format',
+      title: '格式',
       width: 90,
-      render: (format: string) => <FormatTag format={format} />,
+      render: (record) => <FormatTag format={record.format} />,
     },
     {
-      title: '状态',
-      dataIndex: 'status',
       key: 'status',
+      title: '状态',
       width: 100,
-      render: (status: string) => <StatusTag status={status} />,
+      render: (record) => <StatusTag status={record.status} />,
     },
     {
-      title: '最新版本',
-      dataIndex: 'latestVersionNumber',
       key: 'latestVersionNumber',
+      title: '最新版本',
       width: 90,
-      render: (n: number) => (n > 0 ? `v${n}` : '-'),
+      render: (record) => (record.latestVersionNumber > 0 ? `v${record.latestVersionNumber}` : '-'),
     },
     {
-      title: '未发布变更',
-      dataIndex: 'hasUnpublishedChange',
       key: 'hasUnpublishedChange',
+      title: '未发布变更',
       width: 120,
       // hasUnpublishedChange 由服务端计算，前端只做展示
-      render: (has: boolean) =>
-        has ? (
-          <Tooltip title="此配置有草稿未发布，发布后对客户端生效">
-            <Tag color="orange">有未发布变更</Tag>
+      render: (record) =>
+        record.hasUnpublishedChange ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge variant="outline" className="border-transparent bg-amber-50 text-amber-700">有未发布变更</Badge>
+            </TooltipTrigger>
+            <TooltipContent>此配置有草稿未发布，发布后对客户端生效</TooltipContent>
           </Tooltip>
         ) : (
-          <Typography.Text type="secondary">无</Typography.Text>
+          <span className="text-muted-foreground">无</span>
         ),
     },
     {
-      title: '最后更新',
-      dataIndex: 'updatedAt',
       key: 'updatedAt',
+      title: '最后更新',
       width: 170,
       // 时间 + 次行修改人（灰色小字），修改人为空时省略次行
-      render: (value: string, record) => (
-        <>
-          <div>{formatTime(value)}</div>
-          {record.updatedBy && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {record.updatedBy}
-            </Typography.Text>
-          )}
-        </>
+      render: (record) => (
+        <div>
+          <div>{formatTime(record.updatedAt)}</div>
+          {record.updatedBy && <div className="text-xs text-muted-foreground">{record.updatedBy}</div>}
+        </div>
       ),
     },
     {
-      title: '操作',
       key: 'action',
+      title: '操作',
       width: 300,
-      render: (_, record) => (
-        <Space size={4}>
-          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailRecord(record)}>
+      render: (record) => (
+        <div className="flex items-center">
+          <Button variant="link" size="sm" className="h-7 px-1.5" onClick={() => setDetailRecord(record)}>
+            <Eye />
             详情
           </Button>
           <Button
-            type="link"
-            size="small"
-            icon={<EditOutlined />}
+            variant="link"
+            size="sm"
+            className="h-7 px-1.5"
             onClick={() => navigate(`/configuration/${record.id}/edit`)}
           >
+            <Edit />
             编辑
           </Button>
           <Button
-            type="link"
-            size="small"
+            variant="link"
+            size="sm"
+            className="h-7 px-1.5"
             onClick={() => {
-              publishForm.resetFields();
+              setPublishRemark('');
               setPublishTarget(record);
             }}
           >
             发布
           </Button>
-          <Button type="link" size="small" onClick={() => navigate(`/configuration/${record.id}/versions`)}>
+          <Button
+            variant="link"
+            size="sm"
+            className="h-7 px-1.5"
+            onClick={() => navigate(`/configuration/${record.id}/versions`)}
+          >
             版本历史
           </Button>
-          {/* 低频/危险操作收纳进下拉菜单，点击后用 Modal.confirm 做二次确认，onOk 复用原 handler */}
-          <Dropdown
-            trigger={['click']}
-            menu={{
-              items: [
-                {
-                  key: 'offline',
-                  label: '下线',
-                  danger: true,
-                  disabled: record.status !== 'PUBLISHED',
-                  onClick: () =>
-                    Modal.confirm({
-                      title: '确认下线该配置？',
-                      icon: <ExclamationCircleOutlined />,
-                      content: '下线后客户端将无法再拉取该配置',
-                      onOk: () => handleOffline(record),
-                    }),
-                },
-                {
-                  key: 'delete',
-                  label: '删除',
-                  danger: true,
-                  onClick: () =>
-                    Modal.confirm({
-                      title: '确认删除该配置？',
-                      icon: <ExclamationCircleOutlined />,
-                      content: '删除为软删除，版本快照与日志保留',
-                      onOk: () => handleDelete(record),
-                    }),
-                },
-              ],
-            }}
-          >
-            <Button type="link" size="small" icon={<MoreOutlined />} />
-          </Dropdown>
-        </Space>
+          {/* 低频/危险操作收纳进下拉菜单，点击后二次确认 */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="link" size="sm" className="h-7 w-7 px-1" aria-label="更多操作">
+                <MoreHorizontal />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={record.status !== 'PUBLISHED'}
+                onClick={() => setOfflineTarget(record)}
+              >
+                下线
+              </DropdownMenuItem>
+              <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(record)}>
+                删除
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       ),
     },
   ];
 
-  // 列配置：显隐/宽度按页面 key 持久化，操作列（key='action'）强制显示；components 提供表头拖拽调宽
-  const { mergedColumns, components, columnMetas, setVisible, setWidth, reset } = useColumnSettings(
-    'configuration-list',
-    columns,
-  );
+  // 列配置：显隐/宽度按页面 key 持久化，操作列（key='action'）强制显示；表头拖拽调宽由 useColumnSettings 注入
+  const { mergedColumns, columnMetas, setVisible, setWidth, reset } = useColumnSettings('configuration-list', columns);
 
   return (
     <PageContainer
       title="配置管理"
-      icon={<SettingOutlined />}
+      icon={<Settings2 className="size-5" />}
       description="集中维护服务运行参数，支持多格式内容、版本管理与发布流程"
       extra={
         <Button
-          type="primary"
-          icon={<PlusOutlined />}
           onClick={() => {
-            createForm.resetFields();
             // 默认选中当前过滤的配置组（未过滤时留空，表单内组必选）
-            createForm.setFieldsValue({ groupId, format: 'text' });
+            setCreateForm({ ...emptyCreateForm, groupId });
+            setCreateErrors({});
+            setCreateDirty(false);
             setCreateOpen(true);
           }}
         >
+          <Plus />
           新建配置
         </Button>
       }
     >
       {/* 筛选区：命名空间 → 环境 → 配置组三级级联 + 状态 + Key 关键字，点「查询」生效；右侧列配置入口 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12 }}>
-        <Space wrap>
-          <Select
-            style={{ width: 180 }}
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <FilterSelect
             placeholder="全部命名空间"
-            allowClear
+            className="w-44"
             value={namespaceId}
             options={namespaces.map((n) => ({ value: n.id, label: n.namespaceName }))}
-            onDropdownVisibleChange={(open) => {
+            onOpenChange={(open) => {
               // 展开时重新拉取，避免其他页面新增后选项陈旧
               if (open) refreshNamespaces();
             }}
@@ -514,13 +508,12 @@ export default function ConfigurationList() {
               setGroupId(undefined);
             }}
           />
-          <Select
-            style={{ width: 150 }}
+          <FilterSelect
             placeholder="全部环境"
-            allowClear
+            className="w-40"
             value={environmentId}
             options={environments.map((e) => ({ value: e.id, label: e.environmentName }))}
-            onDropdownVisibleChange={(open) => {
+            onOpenChange={(open) => {
               // 展开时按当前命名空间重新拉取
               if (open) refreshEnvironments();
             }}
@@ -530,72 +523,77 @@ export default function ConfigurationList() {
               setGroupId(undefined);
             }}
           />
-          <Select
-            style={{ width: 200 }}
+          <FilterSelect
             placeholder="全部配置组"
-            allowClear
+            className="w-48"
             value={groupId}
             options={groups.map((g) => ({ value: g.id, label: g.groupName }))}
-            onDropdownVisibleChange={(open) => {
+            onOpenChange={(open) => {
               // 展开时按当前命名空间/环境重新拉取
               if (open) refreshGroups();
             }}
-            onChange={(id) => setGroupId(id)}
+            onChange={setGroupId}
           />
-          <Select
-            style={{ width: 130 }}
+          <FilterSelect
             placeholder="全部状态"
-            allowClear
+            className="w-32"
             value={status}
             options={statusOptions}
-            onChange={(v) => setStatus(v)}
+            onChange={setStatus}
           />
-          <Input
-            style={{ width: 240 }}
-            placeholder="按配置 Key 搜索"
-            allowClear
-            value={keywordInput}
-            onChange={(e) => setKeywordInput(e.target.value)}
-            onPressEnter={handleSearch}
-          />
-          <Button type="primary" onClick={handleSearch}>
-            查询
+          <div className="relative">
+            <Search className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="w-60 pl-8"
+              placeholder="按配置 Key 搜索"
+              value={keywordInput}
+              onChange={(e) => setKeywordInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            />
+          </div>
+          <Button onClick={handleSearch}>查询</Button>
+          <Button variant="outline" onClick={handleResetFilter}>
+            重置
           </Button>
-          <Button onClick={handleResetFilter}>重置</Button>
-        </Space>
+        </div>
         <ColumnSettingButton columnMetas={columnMetas} setVisible={setVisible} setWidth={setWidth} reset={reset} />
       </div>
 
-      <Table<ConfigurationResponse>
-        rowKey="id"
+      <DataTable
+        rowKey={(record) => record.id}
         columns={mergedColumns}
-        components={components}
-        dataSource={data ?? []}
+        data={data ?? []}
         loading={loading}
-        // 窄窗口下横向滚动，避免内容越过容器
-        scroll={{ x: 'max-content' }}
-        pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
-        size="middle"
+        pagination={{ pageSize: 10 }}
       />
 
       {/* 发布弹窗：填写变更备注后发布 */}
-      <Modal
-        title={`发布配置：${publishTarget?.configurationKey ?? ''}`}
-        open={publishTarget !== null}
-        onOk={handlePublish}
-        onCancel={() => setPublishTarget(null)}
-        confirmLoading={publishing}
-        okText="发布"
-        width={520}
-        maskClosable={false}
-        destroyOnClose
-      >
-        <Form form={publishForm} layout="vertical">
-          <Form.Item name="changeRemark" label="变更备注">
-            <Input.TextArea rows={3} placeholder="本次发布的变更说明（可选）" maxLength={200} showCount />
-          </Form.Item>
-        </Form>
-      </Modal>
+      <Dialog open={publishTarget !== null} onOpenChange={(open) => !open && setPublishTarget(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>发布配置：{publishTarget?.configurationKey ?? ''}</DialogTitle>
+            <DialogDescription>发布后立即对客户端生效</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-1.5">
+            <Textarea
+              rows={3}
+              maxLength={200}
+              placeholder="本次发布的变更说明（可选）"
+              value={publishRemark}
+              onChange={(e) => setPublishRemark(e.target.value)}
+            />
+            <span className="self-end text-xs text-muted-foreground">{publishRemark.length}/200</span>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPublishTarget(null)}>
+              取消
+            </Button>
+            <Button onClick={handlePublish} disabled={publishing}>
+              {publishing ? '发布中…' : '发布'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 新建配置抽屉：脏表单关闭二次确认由 FormDrawer 内置 */}
       <FormDrawer
@@ -604,51 +602,109 @@ export default function ConfigurationList() {
         onClose={() => setCreateOpen(false)}
         onSubmit={handleCreate}
         loading={creating}
-        form={createForm}
+        dirty={createDirty}
         okText="创建"
         width={640}
       >
-        <Form form={createForm} layout="vertical">
-          <Form.Item name="groupId" label="配置组" rules={[{ required: true, message: '请选择配置组' }]}>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleCreate();
+          }}
+        >
+          <FormField label="配置组" required error={createErrors.groupId}>
             <Select
-              placeholder="选择配置组"
-              options={groups.map((g) => ({ value: g.id, label: g.groupName }))}
-              onDropdownVisibleChange={(open) => {
+              value={createForm.groupId !== undefined ? String(createForm.groupId) : undefined}
+              onValueChange={(v) => setCreateField('groupId', Number(v))}
+              onOpenChange={(open) => {
                 // 展开时按当前命名空间/环境重新拉取，与筛选区下拉同源
                 if (open) refreshGroups();
               }}
-            />
-          </Form.Item>
-          <Form.Item
-            name="configurationKey"
-            label="配置项 Key"
-            rules={[{ required: true, message: '请输入配置项 Key' }]}
-          >
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="选择配置组" />
+              </SelectTrigger>
+              <SelectContent>
+                {groups.map((g) => (
+                  <SelectItem key={g.id} value={String(g.id)}>
+                    {g.groupName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+          <FormField label="配置项 Key" required error={createErrors.configurationKey}>
             {/* maxLength 对齐建表脚本 configuration_key VARCHAR(256) */}
-            <Input placeholder="如 application.yaml / redis.timeout" maxLength={256} showCount />
-          </Form.Item>
-          <Form.Item name="format" label="格式" rules={[{ required: true, message: '请选择格式' }]}>
-            <FormatSelect />
-          </Form.Item>
-          <Form.Item
-            name="content"
+            <Input
+              placeholder="如 application.yaml / redis.timeout"
+              maxLength={256}
+              value={createForm.configurationKey}
+              onChange={(e) => setCreateField('configurationKey', e.target.value)}
+            />
+            <span className="self-end text-xs text-muted-foreground">{createForm.configurationKey.length}/256</span>
+          </FormField>
+          <FormField label="格式" required>
+            <FormatSelect value={createForm.format} onChange={(value) => setCreateField('format', value)} />
+          </FormField>
+          <FormField
             label="配置值"
             extra={
-              getFormatter(createFormat ?? 'text').canFormat && (
-                <Button type="link" size="small" style={{ padding: 0 }} onClick={handleFormatContent}>
+              getFormatter(createForm.format).canFormat && (
+                <Button type="button" variant="link" size="sm" className="h-5 px-0" onClick={handleFormatContent}>
                   校验并格式化
                 </Button>
               )
             }
           >
-            <Input.TextArea rows={6} placeholder="配置内容（可选，也可创建后在编辑器中填写）" />
-          </Form.Item>
-          <Form.Item name="description" label="配置说明">
+            <Textarea
+              rows={6}
+              placeholder="配置内容（可选，也可创建后在编辑器中填写）"
+              value={createForm.content}
+              onChange={(e) => setCreateField('content', e.target.value)}
+            />
+          </FormField>
+          <FormField label="配置说明">
             {/* maxLength 对齐建表脚本 description VARCHAR(512) */}
-            <Input.TextArea rows={2} placeholder="配置用途说明（可选）" maxLength={512} showCount />
-          </Form.Item>
-        </Form>
+            <Textarea
+              rows={2}
+              maxLength={512}
+              placeholder="配置用途说明（可选）"
+              value={createForm.description}
+              onChange={(e) => setCreateField('description', e.target.value)}
+            />
+            <span className="self-end text-xs text-muted-foreground">{createForm.description.length}/512</span>
+          </FormField>
+        </form>
       </FormDrawer>
+
+      {/* 下线二次确认 */}
+      <AlertDialog open={offlineTarget !== null} onOpenChange={(open) => !open && setOfflineTarget(null)}>
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认下线该配置？</AlertDialogTitle>
+            <AlertDialogDescription>下线后客户端将无法再拉取该配置</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={handleOffline}>下线</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 删除二次确认 */}
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除该配置？</AlertDialogTitle>
+            <AlertDialogDescription>删除为软删除，版本快照与日志保留</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete}>删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* 配置详情抽屉：只读展示，编辑入口关闭抽屉后跳编辑器 */}
       <ConfigurationDetailDrawer

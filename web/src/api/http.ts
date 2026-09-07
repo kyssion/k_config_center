@@ -1,6 +1,6 @@
 import axios, { AxiosError } from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
-import { message } from 'antd';
+import { toast } from 'sonner';
 import type { ApiResponse } from './types';
 
 /**
@@ -33,13 +33,13 @@ http.interceptors.response.use(
     if (body.code === 0) {
       return body.data as never;
     }
-    message.error(body.message || '请求失败');
+    toast.error(body.message || '请求失败');
     return Promise.reject(new Error(body.message || `业务错误码 ${body.code}`));
   },
   (error: AxiosError<ApiResponse<unknown>>) => {
     // HTTP 非 2xx：优先展示后端返回的 message，否则展示网络层错误
     const msg = error.response?.data?.message || error.message || '网络请求失败';
-    message.error(msg);
+    toast.error(msg);
     return Promise.reject(error);
   },
 );
