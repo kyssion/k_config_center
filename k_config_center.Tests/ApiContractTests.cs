@@ -81,6 +81,29 @@ public class ApiContractTests : IDisposable
     }
 
     [Fact]
+    public async Task 保存编辑缺乐观锁基准_返回10003()
+    {
+        // expectedUpdatedAt 是保存编辑的必填乐观锁基准，缺失在参数校验阶段拒绝（不触达数据库）
+        var response = await factory.CreateClient().PutAsJsonAsync("/api/configurations/1", new { content = "x" });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(10003, await ReadCodeAsync(response));
+    }
+
+    [Fact]
+    public async Task 保存编辑带合法乐观锁基准_通过校验到达业务层()
+    {
+        // 前端回传详情响应里的 updatedAt（ISO 8601 字符串），须能正常绑定为 DateTimeOffset 并通过校验
+        var body = new { content = "x", expectedUpdatedAt = "2026-01-01T00:00:00.123456+00:00" };
+
+        var response = await factory.CreateClient().PutAsJsonAsync("/api/configurations/1", body);
+
+        // 通过参数校验到达业务层：测试宿主无真实数据库，返回 10000（证明已越过 10003 校验关卡）
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal(10000, await ReadCodeAsync(response));
+    }
+
+    [Fact]
     public async Task 启用鉴权_缺失XApiKey_返回10004()
     {
         var client = CreateClientWithAuth(enabled: true);

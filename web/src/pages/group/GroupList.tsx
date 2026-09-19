@@ -4,6 +4,7 @@ import {
   Divider,
   Form,
   Input,
+  Modal,
   Popconfirm,
   Select,
   Space,
@@ -13,7 +14,7 @@ import {
 } from 'antd';
 import { FolderOpenOutlined, PlusOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { createGroup, deleteGroup, listGroups, updateGroup } from '@/api/group';
+import { createGroup, deleteGroup, listGroups, publishGroup, updateGroup } from '@/api/group';
 import { listEnvironments } from '@/api/environment';
 import { listNamespaces } from '@/api/namespace';
 import type { ConfigurationGroupResponse, EnvironmentResponse } from '@/api/types';
@@ -185,6 +186,39 @@ export default function GroupList() {
     }
   };
 
+  // 整组发布弹窗：当前待发布的配置组
+  const [publishTarget, setPublishTarget] = useState<ConfigurationGroupResponse | null>(null);
+  const [publishForm] = Form.useForm<{ changeRemark?: string }>();
+  const [publishing, setPublishing] = useState(false);
+
+  /** 整组发布确认：一个事务内发布组内全部「有未发布变更且未下线」的配置 */
+  const handleGroupPublish = async () => {
+    if (!publishTarget) return;
+    let values: { changeRemark?: string };
+    try {
+      values = await publishForm.validateFields();
+    } catch {
+      return; // 校验失败，错误已由表单项展示
+    }
+    setPublishing(true);
+    try {
+      const result = await publishGroup(publishTarget.id, {
+        changeRemark: values.changeRemark || null,
+      });
+      if (result.items.length === 0) {
+        message.info('组内没有需要发布的变更');
+      } else {
+        message.success(`整组发布成功：发布 ${result.items.length} 项，跳过 ${result.skippedCount} 项（无变更或已下线）`);
+      }
+      setPublishTarget(null);
+      publishForm.resetFields();
+    } catch {
+      // 接口错误已由拦截器提示
+    } finally {
+      setPublishing(false);
+    }
+  };
+
   const columns: ColumnsType<ConfigurationGroupResponse> = [
     {
       title: 'ID',
@@ -227,9 +261,19 @@ export default function GroupList() {
     {
       title: '操作',
       key: 'action',
-      width: 180,
+      width: 230,
       render: (_, record) => (
         <Space size={0} split={<Divider type="vertical" />}>
+          <Button
+            type="link"
+            size="small"
+            onClick={() => {
+              publishForm.resetFields();
+              setPublishTarget(record);
+            }}
+          >
+            整组发布
+          </Button>
           <Button type="link" size="small" onClick={() => openEdit(record)}>
             编辑
           </Button>
@@ -382,6 +426,25 @@ export default function GroupList() {
           </Form.Item>
         </Form>
       </FormDrawer>
+
+      {/* 整组发布弹窗：填写变更备注；一个事务内发布组内全部有变更且未下线的配置 */}
+      <Modal
+        title={`整组发布：${publishTarget?.groupName ?? ''}`}
+        open={publishTarget !== null}
+        onOk={handleGroupPublish}
+        onCancel={() => setPublishTarget(null)}
+        confirmLoading={publishing}
+        okText="发布"
+        width={520}
+        maskClosable={false}
+        destroyOnClose
+      >
+        <Form form={publishForm} layout="vertical">
+          <Form.Item name="changeRemark" label="变更备注">
+            <Input.TextArea rows={3} placeholder="本次发布的变更说明（可选，写入组内每条版本快照）" maxLength={200} showCount />
+          </Form.Item>
+        </Form>
+      </Modal>
     </PageContainer>
   );
 }

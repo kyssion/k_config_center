@@ -120,6 +120,7 @@ export default function ConfigurationEditor() {
 
   /** 保存草稿：只更新当前态，不产生版本；保存前按格式走注册表校验 */
   const handleSave = async () => {
+    if (!detail) return;
     const error = validateContent(format, content);
     if (error) {
       message.error(error);
@@ -130,6 +131,8 @@ export default function ConfigurationEditor() {
       await updateConfiguration(configurationId, {
         content,
         format,
+        // 乐观锁基准：本次加载详情时的 updatedAt；期间被他人修改/发布则服务端拒绝保存（30005）
+        expectedUpdatedAt: detail.configuration.updatedAt,
         // 描述与标签本页不编辑，回传原值避免被置空
         description: detail?.configuration.description,
         tags: detail?.configuration.tags,

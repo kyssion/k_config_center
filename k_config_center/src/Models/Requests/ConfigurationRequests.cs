@@ -17,13 +17,15 @@ public record ConfigurationCreateRequest(
     [StringLength(512)] string? Description = null,
     [StringLength(256)] string? Tags = null);
 
-/// <summary>保存编辑请求：只更新当前态字段，不产生版本</summary>
+/// <summary>保存编辑请求：只更新当前态字段，不产生版本；携带乐观锁基准 updated_at，已被他人修改时拒绝保存（30005）</summary>
 /// <param name="Content">配置内容，可空</param>
+/// <param name="ExpectedUpdatedAt">乐观锁基准：客户端加载详情时的 updated_at（ISO 8601）；期间配置被他人修改/发布/删除导致 updated_at 变化时保存被拒（30005），需刷新后重试</param>
 /// <param name="Format">内容格式：text/json/yaml/properties，缺省 text</param>
 /// <param name="Description">描述，可空</param>
 /// <param name="Tags">标签（逗号分隔），可空</param>
 public record ConfigurationUpdateRequest(
     string? Content,
+    [Required] DateTimeOffset? ExpectedUpdatedAt,
     [StringLength(16)] string Format = "text",
     [StringLength(512)] string? Description = null,
     [StringLength(256)] string? Tags = null);

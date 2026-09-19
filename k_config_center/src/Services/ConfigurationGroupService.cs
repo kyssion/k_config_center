@@ -12,6 +12,7 @@ public class ConfigurationGroupService(
     ConfigurationGroupRepository configurationGroupRepository,
     ConfigurationRepository configurationRepository,
     OperationLogRepository operationLogRepository,
+    DatabaseTransactionRunner transactionRunner,
     OperatorContext operatorContext)
 {
     /// <summary>配置组列表：命名空间/环境过滤均可选（后端方案端点表两参数并列），按创建时间排序</summary>
@@ -26,11 +27,18 @@ public class ConfigurationGroupService(
             request.GroupName, request.Description, Status: 1,
             CreatedBy: operatorContext.Operator, UpdatedBy: null,
             CreatedAt: DateTimeOffset.UtcNow, UpdatedAt: DateTimeOffset.UtcNow);
-        try { data = await configurationGroupRepository.InsertAsync(data); }
+        try
+        {
+            // 业务写与审计日志同事务：日志写失败时整体回滚，保证「有变更必有审计」
+            await transactionRunner.ExecuteAsync(async () =>
+            {
+                data = await configurationGroupRepository.InsertAsync(data);
+                await WriteLogAsync("CREATE", new { resource = "group", request.GroupKey },
+                    namespaceId: data.NamespaceId, environmentId: data.EnvironmentId, groupId: data.Id);
+            });
+        }
         catch (Exception exception) when (OperationHelper.IsUniqueViolation(exception))
         { throw new BusinessException(ErrorCode.GroupKeyConflict, $"配置组 key 在环境内已存在：{request.GroupKey}"); }
-        await WriteLogAsync("CREATE", new { resource = "group", request.GroupKey },
-            namespaceId: data.NamespaceId, environmentId: data.EnvironmentId, groupId: data.Id);
         return ConfigurationGroupResponse.From(data);
     }
 
@@ -40,10 +48,13 @@ public class ConfigurationGroupService(
     {
         var existing = await configurationGroupRepository.GetByIdAsync(id)
             ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置组不存在");
-        await configurationGroupRepository.UpdateAsync(id, request.GroupName, request.Description, request.Status, operatorContext.Operator);
-        // 审计日志维度带全：上级命名空间/环境 id 从既有记录取，避免日志只挂配置组导致审计页缺失上级维度信息
-        await WriteLogAsync("UPDATE", new { resource = "group", request.GroupName },
-            namespaceId: existing.NamespaceId, environmentId: existing.EnvironmentId, groupId: id);
+        await transactionRunner.ExecuteAsync(async () =>
+        {
+            await configurationGroupRepository.UpdateAsync(id, request.GroupName, request.Description, request.Status, operatorContext.Operator);
+            // 审计日志维度带全：上级命名空间/环境 id 从既有记录取，避免日志只挂配置组导致审计页缺失上级维度信息
+            await WriteLogAsync("UPDATE", new { resource = "group", request.GroupName },
+                namespaceId: existing.NamespaceId, environmentId: existing.EnvironmentId, groupId: id);
+        });
     }
 
     /// <summary>软删除配置组：存在未删除的配置项时拒绝（20004）</summary>
@@ -53,9 +64,12 @@ public class ConfigurationGroupService(
             ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置组不存在");
         if (await configurationRepository.ExistsByGroupIdAsync(id))
             throw new BusinessException(ErrorCode.CascadeDeleteConflict, "存在未删除的配置项，拒绝删除");
-        await configurationGroupRepository.SoftDeleteAsync(id);
-        await WriteLogAsync("DELETE", new { resource = "group", id },
-            namespaceId: existing.NamespaceId, environmentId: existing.EnvironmentId, groupId: id);
+        await transactionRunner.ExecuteAsync(async () =>
+        {
+            await configurationGroupRepository.SoftDeleteAsync(id);
+            await WriteLogAsync("DELETE", new { resource = "group", id },
+                namespaceId: existing.NamespaceId, environmentId: existing.EnvironmentId, groupId: id);
+        });
     }
 
     /// <summary>写审计日志：操作人/客户端 IP 取自当前请求的 OperatorContext</summary>

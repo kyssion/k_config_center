@@ -15,9 +15,9 @@ import type {
 /** 配置项接口：对应后端 ConfigurationController（路由前缀 /api/configurations），
  * 含编辑（草稿）/发布/回滚/下线/版本历史；客户端读取接口为 SDK 专用，Portal 不消费 */
 
-/** 配置项列表（命名空间/环境/组可选组合过滤，非分页），附 hasUnpublishedChange 标记 */
+/** 配置项列表（命名空间/环境/组可选组合过滤，服务端分页），附 hasUnpublishedChange 标记 */
 export const listConfigurations = (params: ConfigurationListQuery) =>
-  request.get<ConfigurationResponse[]>('/configurations', { ...params });
+  request.get<PageResponse<ConfigurationResponse>>('/configurations', { ...params });
 
 /** 配置详情：当前编辑态 + 生效版本快照 */
 export const getConfiguration = (id: number) =>

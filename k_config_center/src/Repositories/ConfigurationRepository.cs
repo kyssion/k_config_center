@@ -8,10 +8,15 @@ namespace k_config_center.Repositories;
 /// 含发布流程需要的原子操作（版本号自增、生效指针切换），事务边界由 Service 层通过 DatabaseTransactionRunner 编排</summary>
 public class ConfigurationRepository(ISqlSugarClient database)
 {
-    /// <summary>配置列表：组/命名空间/环境/状态/关键字过滤均可选（实体含 NamespaceId/EnvironmentId 冗余列，单表过滤无需联表），按创建时间排序。
-    /// LeftJoin 命名空间/环境/配置组表带出冗余名称与业务 key（联表显式带 deleted_at 条件，不依赖全局过滤器在联表中的行为，关联不到为 null）</summary>
-    public async Task<List<ConfigurationData>> ListAsync(long? groupId, long? namespaceId, long? environmentId, string? status, string? keyword) =>
-        (await database.Queryable<ConfigCenterConfiguration>()
+    /// <summary>配置列表分页查询：组/命名空间/环境/状态/关键字过滤均可选（实体含 NamespaceId/EnvironmentId 冗余列，单表过滤无需联表），
+    /// 按创建时间排序并叠加 id 作次序键（created_at 并列时分页结果稳定，避免翻页时行在页间跳动）。
+    /// LeftJoin 命名空间/环境/配置组表带出冗余名称与业务 key（联表显式带 deleted_at 条件，不依赖全局过滤器在联表中的行为，关联不到为 null）；
+    /// 返回当前页数据与总条数（total 供前端分页器展示）</summary>
+    public async Task<(List<ConfigurationData> Items, int Total)> ListAsync(
+        long? groupId, long? namespaceId, long? environmentId, string? status, string? keyword, int pageIndex, int pageSize)
+    {
+        RefAsync<int> total = 0;
+        var rows = (await database.Queryable<ConfigCenterConfiguration>()
             .LeftJoin<ConfigCenterNamespace>((it, ns) => it.NamespaceId == ns.Id && ns.DeletedAt == null)
             .LeftJoin<ConfigCenterEnvironment>((it, ns, env) => it.EnvironmentId == env.Id && env.DeletedAt == null)
             .LeftJoin<ConfigCenterConfigurationGroup>((it, ns, env, grp) => it.GroupId == grp.Id && grp.DeletedAt == null)
@@ -21,9 +26,11 @@ public class ConfigurationRepository(ISqlSugarClient database)
             .WhereIF(!string.IsNullOrEmpty(status), it => it.Status == status)
             .WhereIF(!string.IsNullOrEmpty(keyword), it => it.ConfigurationKey.Contains(keyword!))
             .OrderBy(it => it.CreatedAt)
+            .OrderBy(it => it.Id)
             .Select((it, ns, env, grp) => new
-            { Entity = it, ns.NamespaceName, env.EnvironmentName, grp.GroupName, ns.NamespaceKey, env.EnvironmentKey, grp.GroupKey }).ToListAsync())
-        .Select(row => From(row.Entity) with
+            { Entity = it, ns.NamespaceName, env.EnvironmentName, grp.GroupName, ns.NamespaceKey, env.EnvironmentKey, grp.GroupKey })
+            .ToPageListAsync(pageIndex, pageSize, total));
+        return (rows.Select(row => From(row.Entity) with
         {
             NamespaceName = row.NamespaceName,
             EnvironmentName = row.EnvironmentName,
@@ -31,7 +38,8 @@ public class ConfigurationRepository(ISqlSugarClient database)
             NamespaceKey = row.NamespaceKey,
             EnvironmentKey = row.EnvironmentKey,
             GroupKey = row.GroupKey
-        }).ToList();
+        }).ToList(), total);
+    }
 
     /// <summary>按 id 查单条（已软删返回 null）：LeftJoin 带出三个维度的冗余名称与业务 key，与列表同口径</summary>
     public async Task<ConfigurationData?> GetByIdAsync(long id)
@@ -59,6 +67,14 @@ public class ConfigurationRepository(ISqlSugarClient database)
     public Task<bool> ExistsByGroupIdAsync(long groupId) =>
         database.Queryable<ConfigCenterConfiguration>().AnyAsync(it => it.GroupId == groupId);
 
+    /// <summary>组内全部未删除配置（组级发布用，不联表带名称）：按 id 排序保证处理顺序稳定</summary>
+    public async Task<List<ConfigurationData>> ListByGroupIdAsync(long groupId) =>
+        (await database.Queryable<ConfigCenterConfiguration>()
+            .Where(it => it.GroupId == groupId)
+            .OrderBy(it => it.Id)
+            .ToListAsync())
+        .Select(From).ToList();
+
     /// <summary>插入：id 由数据库生成后回填；唯一冲突原样抛出，由 Service 转业务错误码</summary>
     public async Task<ConfigurationData> InsertAsync(ConfigurationData data)
     {
@@ -67,12 +83,14 @@ public class ConfigurationRepository(ISqlSugarClient database)
         return data with { Id = id };
     }
 
-    /// <summary>保存草稿：只更新当前态内容字段，不动 status / 版本号 / 生效指针（后端方案 8.1）</summary>
-    public Task UpdateDraftAsync(long id, string? content, string format, string? md5, string? description, string? tags, string? updatedBy) =>
+    /// <summary>保存草稿：只更新当前态内容字段，不动 status / 版本号 / 生效指针（后端方案 8.1）。
+    /// WHERE 携带 updated_at = 加载基准作乐观锁（updated_at 由触发器在任意 UPDATE 前刷新，含并发软删）：
+    /// 期间被他人抢先修改则影响行数为 0，由 Service 转 30005；返回受影响行数</summary>
+    public Task<int> UpdateDraftAsync(long id, string? content, string format, string? md5, string? description, string? tags, string? updatedBy, DateTimeOffset expectedUpdatedAt) =>
         database.Updateable<ConfigCenterConfiguration>()
             .SetColumns(it => new ConfigCenterConfiguration
             { Content = content, Format = format, Md5 = md5, Description = description, Tags = tags, UpdatedBy = updatedBy })
-            .Where(it => it.Id == id).ExecuteCommandAsync();
+            .Where(it => it.Id == id && it.UpdatedAt == expectedUpdatedAt).ExecuteCommandAsync();
 
     /// <summary>软删除：仅置 deleted_at</summary>
     public Task SoftDeleteAsync(long id) =>

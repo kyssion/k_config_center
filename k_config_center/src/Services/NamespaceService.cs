@@ -14,6 +14,7 @@ public class NamespaceService(
     NamespaceRepository namespaceRepository,
     EnvironmentRepository environmentRepository,
     OperationLogRepository operationLogRepository,
+    DatabaseTransactionRunner transactionRunner,
     OperatorContext operatorContext)
 {
     /// <summary>命名空间列表：软删过滤由 Repository 的查询（全局过滤器）保证，按创建时间排序</summary>
@@ -26,10 +27,17 @@ public class NamespaceService(
         var data = new NamespaceData(0, request.NamespaceKey, request.NamespaceName, request.Description, Status: 1,
             CreatedBy: operatorContext.Operator, UpdatedBy: null,
             CreatedAt: DateTimeOffset.UtcNow, UpdatedAt: DateTimeOffset.UtcNow);
-        try { data = await namespaceRepository.InsertAsync(data); }
+        try
+        {
+            // 业务写与审计日志同事务：日志写失败时整体回滚，保证「有变更必有审计」
+            await transactionRunner.ExecuteAsync(async () =>
+            {
+                data = await namespaceRepository.InsertAsync(data);
+                await WriteLogAsync("CREATE", new { resource = "namespace", request.NamespaceKey }, namespaceId: data.Id);
+            });
+        }
         catch (Exception exception) when (OperationHelper.IsUniqueViolation(exception))
         { throw new BusinessException(ErrorCode.NamespaceKeyConflict, $"命名空间 key 已存在：{request.NamespaceKey}"); }
-        await WriteLogAsync("CREATE", new { resource = "namespace", request.NamespaceKey }, namespaceId: data.Id);
         return NamespaceResponse.From(data);
     }
 
@@ -39,8 +47,11 @@ public class NamespaceService(
     {
         if (await namespaceRepository.GetByIdAsync(id) == null)
             throw new BusinessException(ErrorCode.ResourceNotFound, "命名空间不存在");
-        await namespaceRepository.UpdateAsync(id, request.NamespaceName, request.Description, request.Status, operatorContext.Operator);
-        await WriteLogAsync("UPDATE", new { resource = "namespace", request.NamespaceName }, namespaceId: id);
+        await transactionRunner.ExecuteAsync(async () =>
+        {
+            await namespaceRepository.UpdateAsync(id, request.NamespaceName, request.Description, request.Status, operatorContext.Operator);
+            await WriteLogAsync("UPDATE", new { resource = "namespace", request.NamespaceName }, namespaceId: id);
+        });
     }
 
     /// <summary>软删除命名空间：存在未删除的下级环境时拒绝（20004），不做级联软删，需自底向上清空</summary>
@@ -50,8 +61,11 @@ public class NamespaceService(
             throw new BusinessException(ErrorCode.ResourceNotFound, "命名空间不存在");
         if (await environmentRepository.ExistsByNamespaceIdAsync(id))
             throw new BusinessException(ErrorCode.CascadeDeleteConflict, "存在未删除的下级环境，拒绝删除");
-        await namespaceRepository.SoftDeleteAsync(id);
-        await WriteLogAsync("DELETE", new { resource = "namespace", id }, namespaceId: id);
+        await transactionRunner.ExecuteAsync(async () =>
+        {
+            await namespaceRepository.SoftDeleteAsync(id);
+            await WriteLogAsync("DELETE", new { resource = "namespace", id }, namespaceId: id);
+        });
     }
 
     /// <summary>写审计日志：操作人/客户端 IP 取自当前请求的 OperatorContext</summary>

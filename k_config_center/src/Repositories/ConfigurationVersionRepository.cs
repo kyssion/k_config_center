@@ -33,10 +33,11 @@ public class ConfigurationVersionRepository(ISqlSugarClient database)
         return (entities.Select(From).ToList(), total);
     }
 
-    /// <summary>批量取生效版本 md5：一次查回供列表接口内存比对「有未发布变更」，避免逐条回查</summary>
+    /// <summary>批量取生效版本 md5：一次查回供列表接口内存比对「有未发布变更」，避免逐条回查；空 id 集合不发请求</summary>
     public async Task<Dictionary<long, string?>> GetMd5ByIdsAsync(List<long> ids) =>
-        (await database.Queryable<ConfigCenterConfigurationVersion>().In(ids).ToListAsync())
-        .ToDictionary(it => it.Id, it => it.Md5);
+        ids.Count == 0 ? [] :
+            (await database.Queryable<ConfigCenterConfigurationVersion>().In(ids).ToListAsync())
+            .ToDictionary(it => it.Id, it => it.Md5);
 
     /// <summary>插入版本快照，返回数据库生成的快照 id；
     /// UNIQUE(configuration_id, version_number) 冲突原样抛出，由 Service 转发布并发冲突（30004）</summary>

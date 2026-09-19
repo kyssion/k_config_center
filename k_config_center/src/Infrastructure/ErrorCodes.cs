@@ -46,4 +46,7 @@ public enum ErrorCode
 
     /// <summary>发布并发冲突（配置与发布段 30000+）：版本号唯一约束触发，需重试</summary>
     PublishConcurrencyConflict = 30004,
+
+    /// <summary>配置并发修改冲突（配置与发布段 30000+）：保存编辑时 updated_at 与加载基准不一致（已被他人修改/发布/删除），需刷新后重试</summary>
+    ConfigurationConcurrentModification = 30005,
 }

@@ -244,6 +244,10 @@ CREATE TABLE config_center_operation_log (
 
 CREATE INDEX index_operation_log_configuration ON config_center_operation_log (configuration_id, created_at DESC);
 
+-- 检索路径索引：审计页默认按时间倒序浏览（时间区间/无过滤），以及「操作人 + 时间区间」常用组合（Portal 检索表单）
+CREATE INDEX index_operation_log_created_at ON config_center_operation_log (created_at DESC);
+CREATE INDEX index_operation_log_operator_time ON config_center_operation_log (operator, created_at DESC);
+
 COMMENT ON TABLE  config_center_operation_log                   IS '操作日志表：配置中心操作审计记录';
 COMMENT ON COLUMN config_center_operation_log.id                IS '自增主键';
 COMMENT ON COLUMN config_center_operation_log.namespace_id      IS '命名空间 ID（无外键约束）';

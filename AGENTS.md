@@ -62,7 +62,8 @@ k_config_center/                  # 后端 ASP.NET Core
       Domain/                     # record 业务数据（Repository 对外交换的数据形态）
       Requests/ Responses/        # API 入参 / 出参 DTO
     Infrastructure/               # ApiResponse、BusinessException、ErrorCode、SqlSugarSetup、事务 Runner、鉴权/校验/健康检查中间件
-k_config_center.Tests/           # xUnit 测试工程（WebApplicationFactory 集成测试，不依赖真实数据库）
+k_config_center.ClientSdk/        # .NET 客户端 SDK（ConfigCenterClient：本地缓存 + 长轮询热更新 + 快照兜底，零依赖 BCL）
+k_config_center.Tests/           # xUnit 测试工程（后端 API 契约集成测试 + SDK/缓存单元测试，不依赖真实数据库）
 web/                              # 前端 React SPA
   src/
     api/                          # 按资源一个文件（http.ts 为 axios 封装，拦截器已解包 data）

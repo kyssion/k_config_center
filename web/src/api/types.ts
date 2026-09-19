@@ -184,6 +184,8 @@ export interface ConfigurationCreateRequest {
 
 export interface ConfigurationUpdateRequest {
   content?: string | null;
+  /** 乐观锁基准：加载详情时的 updatedAt；期间配置被他人修改/发布/删除时保存被拒（30005） */
+  expectedUpdatedAt: string;
   format?: string;
   description?: string | null;
   tags?: string | null;
@@ -202,6 +204,12 @@ export interface RollbackRequest {
 export interface PublishResponse {
   versionId: number;
   versionNumber: number;
+}
+
+/** 组级发布结果：本次实际发布与跳过的配置清单 */
+export interface GroupPublishResponse {
+  items: { configurationId: number; configurationKey: string; versionNumber: number }[];
+  skippedCount: number;
 }
 
 // ---------- 操作日志 ----------
@@ -236,11 +244,13 @@ export interface OperationLogQuery {
   pageSize?: number;
 }
 
-/** 配置项列表查询参数：命名空间/环境/组均可选组合过滤，全不传为全量 */
+/** 配置项列表查询参数：命名空间/环境/组均可选组合过滤，服务端分页 */
 export interface ConfigurationListQuery {
   namespaceId?: number;
   environmentId?: number;
   groupId?: number;
   status?: ConfigStatus;
   keyword?: string;
+  pageIndex: number;
+  pageSize: number;
 }

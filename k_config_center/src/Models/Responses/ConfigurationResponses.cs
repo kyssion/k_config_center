@@ -72,3 +72,14 @@ public record ConfigurationVersionResponse(long Id, long ConfigurationId, long V
 /// <param name="VersionId">新生成的版本快照 id</param>
 /// <param name="VersionNumber">新生成的版本号</param>
 public record PublishResponse(long VersionId, long VersionNumber);
+
+/// <summary>组级发布结果：本次实际发布与跳过的配置清单</summary>
+/// <param name="Items">本次发布的配置项（id、key、新版本号）</param>
+/// <param name="SkippedCount">跳过条数（无未发布变更或已下线）</param>
+public record GroupPublishResponse(List<GroupPublishItemResponse> Items, int SkippedCount);
+
+/// <summary>组级发布结果项：单条配置的发布结果</summary>
+/// <param name="ConfigurationId">配置 id</param>
+/// <param name="ConfigurationKey">配置 key</param>
+/// <param name="VersionNumber">本次发布生成的版本号</param>
+public record GroupPublishItemResponse(long ConfigurationId, string ConfigurationKey, long VersionNumber);

@@ -11,17 +11,20 @@ namespace k_config_center.Controllers;
 [Route("api/configurations")]
 public class ConfigurationController(ConfigurationService configurationService, PublishService publishService) : ControllerBase
 {
-    /// <summary>配置项列表</summary>
-    /// <remarks>返回当前编辑态，附「有未发布变更」hasUnpublishedChange 标记（服务端算好，前端不做 md5 对比）；已软删除的记录不返回</remarks>
+    /// <summary>配置项列表（分页）</summary>
+    /// <remarks>返回当前编辑态，附「有未发布变更」hasUnpublishedChange 标记（服务端算好，前端不做 md5 对比）；已软删除的记录不返回；
+    /// data 为分页结构 { items: ConfigurationResponse[], total }</remarks>
     /// <param name="groupId">所属配置组 id（可选）</param>
     /// <param name="namespaceId">所属命名空间 id（可选）</param>
     /// <param name="environmentId">所属环境 id（可选）</param>
     /// <param name="status">按状态过滤（可选）：DRAFT / PUBLISHED / OFFLINE</param>
     /// <param name="keyword">按 key 模糊匹配（可选）</param>
-    /// <returns>data 为 ConfigurationResponse 数组；各过滤参数可任意组合，全不传返回全量</returns>
+    /// <param name="pageIndex">页码，从 1 开始</param>
+    /// <param name="pageSize">每页条数</param>
+    /// <returns>data 为分页结构 { items: ConfigurationResponse[], total }</returns>
     [HttpGet]
-    public async Task<object> List(long? groupId, long? namespaceId, long? environmentId, string? status, string? keyword) =>
-        ApiResponse.Ok(await configurationService.ListAsync(groupId, namespaceId, environmentId, status, keyword));
+    public async Task<object> List(long? groupId, long? namespaceId, long? environmentId, string? status, string? keyword, int pageIndex = 1, int pageSize = 20) =>
+        ApiResponse.Ok(await configurationService.ListAsync(groupId, namespaceId, environmentId, status, keyword, pageIndex, pageSize));
 
     /// <summary>配置详情</summary>
     /// <remarks>返回当前编辑态 + 生效版本快照（从未发布过则 publishedVersion 为 null）；不存在或已软删除返回 10002</remarks>
@@ -40,9 +43,11 @@ public class ConfigurationController(ConfigurationService configurationService, 
         ApiResponse.Ok(await configurationService.CreateAsync(request));
 
     /// <summary>保存编辑（草稿）</summary>
-    /// <remarks>只更新当前态 content / format / md5 / 描述 / 标签，**不产生版本、不改变 status**，需发布后客户端才能读到；目标不存在返回 10002</remarks>
+    /// <remarks>只更新当前态 content / format / md5 / 描述 / 标签，**不产生版本、不改变 status**，需发布后客户端才能读到；
+    /// 请求须携带加载详情时的 updatedAt 作乐观锁基准（expectedUpdatedAt），期间配置被他人修改/发布/删除时保存被拒返回 30005，需刷新后重试；
+    /// 目标不存在返回 10002</remarks>
     /// <param name="id">配置项 id</param>
-    /// <param name="request">编辑参数：内容、格式、描述、标签</param>
+    /// <param name="request">编辑参数：内容、乐观锁基准（加载详情时的 updatedAt）、格式、描述、标签</param>
     /// <returns>data 为 null，code=0 表示成功</returns>
     [HttpPut("{id:long}")]
     public async Task<object> Update(long id, ConfigurationUpdateRequest request)
@@ -63,7 +68,8 @@ public class ConfigurationController(ConfigurationService configurationService, 
     }
 
     /// <summary>发布配置</summary>
-    /// <remarks>事务内：版本号原子 +1 → 写版本快照 → 更新生效指针（status 置 PUBLISHED）→ 写审计日志；
+    /// <remarks>事务内：版本号原子 +1（UPDATE 取行锁）→ 重读最新状态并校验 → 写版本快照 → 更新生效指针（status 置 PUBLISHED）→ 写审计日志，
+    /// 快照内容取自行锁后的重读，不存在并发保存草稿把旧内容定格成版本的窗口；
     /// 无未发布变更时拒绝重复发布返回 30002；并发发布冲突返回 30004（可重试）</remarks>
     /// <param name="id">配置项 id</param>
     /// <param name="request">发布参数：变更备注（可选）</param>

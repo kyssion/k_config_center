@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace k_config_center.Infrastructure;
 
 /// <summary>API Key 鉴权中间件（阶段一最小鉴权）：服务端配置 Auth:Enabled=true 后，
@@ -17,7 +20,7 @@ public class ApiKeyMiddleware(RequestDelegate next)
         if (context.Request.Path.StartsWithSegments("/api"))
         {
             var expectedKey = configuration["Auth:ApiKey"];
-            if (string.IsNullOrWhiteSpace(expectedKey) || context.Request.Headers["X-Api-Key"].ToString() != expectedKey)
+            if (string.IsNullOrWhiteSpace(expectedKey) || !FixedTimeEquals(context.Request.Headers["X-Api-Key"].ToString(), expectedKey))
             {
                 context.Response.StatusCode = StatusCodes.Status200OK;
                 await context.Response.WriteAsJsonAsync(ApiResponse.Fail(ErrorCode.Unauthorized, "未授权：X-Api-Key 缺失或无效"));
@@ -26,4 +29,8 @@ public class ApiKeyMiddleware(RequestDelegate next)
         }
         await next(context);
     }
+
+    /// <summary>常量时间比较，避免逐字节短路造成的时序侧信道</summary>
+    private static bool FixedTimeEquals(string presented, string expected) =>
+        CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(presented), Encoding.UTF8.GetBytes(expected));
 }

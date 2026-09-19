@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\k_config_center\k_config_center.csproj" />
+    <ProjectReference Include="..\k_config_center.ClientSdk\k_config_center.ClientSdk.csproj" />
   </ItemGroup>
 
 </Project>

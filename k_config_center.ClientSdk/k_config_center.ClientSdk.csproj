@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- XML 注释即使用文档；1591 压未注释私有成员告警，保持 0 警告构建 -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 测试工程经 internal 构造注入 HttpMessageHandler 模拟服务端 -->
+    <InternalsVisibleTo Include="k_config_center.Tests" />
+  </ItemGroup>
+
+</Project>

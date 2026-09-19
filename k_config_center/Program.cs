@@ -20,6 +20,13 @@ public partial class Program
         builder.Services.Configure<ApiBehaviorOptions>(options => options.SuppressModelStateInvalidFilter = true);
         builder.Services.AddControllers(options => options.Filters.Add<ModelValidationFilter>());
         builder.Services.AddSqlSugarSetup(builder.Configuration);
+        // 组指纹进程内缓存（长轮询读路径减压，见 GroupFingerprintCache）：全局单例，写操作后整体失效
+        builder.Services.AddMemoryCache();
+        builder.Services.AddSingleton<GroupFingerprintCache>();
+        // 长轮询变更唤醒信号（写操作事务提交后广播，挂起中的长轮询即时重查指纹）
+        builder.Services.AddSingleton<GroupChangeNotifier>();
+        // 客户端接口配置（appsettings "Client" 节：长轮询挂起上限与重查间隔）
+        builder.Services.Configure<ClientSettings>(builder.Configuration.GetSection("Client"));
         // Service 层通过 IHttpContextAccessor 获取当前请求（操作人/客户端 IP 提取）
         builder.Services.AddHttpContextAccessor();
         // 操作人上下文：每请求作用域从 HttpContext 提取一次，业务层只依赖这两个值，不耦合 Web 类型

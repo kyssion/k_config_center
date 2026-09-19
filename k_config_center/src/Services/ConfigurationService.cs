@@ -15,17 +15,21 @@ public class ConfigurationService(
     ConfigurationVersionRepository configurationVersionRepository,
     ConfigurationGroupRepository configurationGroupRepository,
     OperationLogRepository operationLogRepository,
+    DatabaseTransactionRunner transactionRunner,
+    GroupFingerprintCache fingerprintCache,
+    GroupChangeNotifier changeNotifier,
     OperatorContext operatorContext)
 {
-    /// <summary>配置项列表（组/命名空间/环境/状态/关键字过滤均可选）：附「有未发布变更」标记，前端不做 md5 对比。
-    /// 一次性取出全部生效版本的 md5 做内存比对，避免逐条回查数据库</summary>
-    public async Task<List<ConfigurationResponse>> ListAsync(long? groupId, long? namespaceId, long? environmentId, string? status, string? keyword)
+    /// <summary>配置项列表分页查询（组/命名空间/环境/状态/关键字过滤均可选）：附「有未发布变更」标记，前端不做 md5 对比。
+    /// 一次性取出当前页全部生效版本的 md5 做内存比对，避免逐条回查数据库</summary>
+    public async Task<PageResponse<ConfigurationResponse>> ListAsync(
+        long? groupId, long? namespaceId, long? environmentId, string? status, string? keyword, int pageIndex, int pageSize)
     {
-        var configurations = await configurationRepository.ListAsync(groupId, namespaceId, environmentId, status, keyword);
+        var (configurations, total) = await configurationRepository.ListAsync(groupId, namespaceId, environmentId, status, keyword, pageIndex, pageSize);
         var publishedVersionIds = configurations.Where(it => it.PublishedVersionId != null).Select(it => it.PublishedVersionId!.Value).ToList();
         var publishedMd5ById = await configurationVersionRepository.GetMd5ByIdsAsync(publishedVersionIds);
-        return configurations.Select(it => ConfigurationResponse.From(it,
-            hasUnpublishedChange: it.PublishedVersionId == null || publishedMd5ById.GetValueOrDefault(it.PublishedVersionId.Value) != it.Md5)).ToList();
+        return new PageResponse<ConfigurationResponse>(configurations.Select(it => ConfigurationResponse.From(it,
+            hasUnpublishedChange: it.PublishedVersionId == null || publishedMd5ById.GetValueOrDefault(it.PublishedVersionId.Value) != it.Md5)).ToList(), total);
     }
 
     /// <summary>配置详情：当前编辑态 + 生效版本快照（从未发布则为 null），供编辑页与 Diff 对比使用</summary>
@@ -52,35 +56,54 @@ public class ConfigurationService(
             Status: "DRAFT", PublishedVersionId: null, LatestVersionNumber: 0, PublishedAt: null,
             CreatedBy: operatorContext.Operator, UpdatedBy: null,
             CreatedAt: DateTimeOffset.UtcNow, UpdatedAt: DateTimeOffset.UtcNow);
-        try { data = await configurationRepository.InsertAsync(data); }
+        try
+        {
+            // 业务写与审计日志同事务：日志写失败时整体回滚，保证「有变更必有审计」
+            await transactionRunner.ExecuteAsync(async () =>
+            {
+                data = await configurationRepository.InsertAsync(data);
+                await WriteLogAsync("CREATE", new { resource = "configuration", request.ConfigurationKey },
+                    data.NamespaceId, data.EnvironmentId, data.GroupId, data.Id);
+            });
+        }
         catch (Exception exception) when (OperationHelper.IsUniqueViolation(exception))
         { throw new BusinessException(ErrorCode.ConfigurationKeyConflict, $"配置 key 在组内已存在：{request.ConfigurationKey}"); }
-        await WriteLogAsync("CREATE", new { resource = "configuration", request.ConfigurationKey },
-            data.NamespaceId, data.EnvironmentId, data.GroupId, data.Id);
         return ConfigurationResponse.From(data, hasUnpublishedChange: true); // 新建即未发布，必有未发布变更
     }
 
-    /// <summary>保存编辑（草稿）：只更新 content/format/md5/description/tags，不产生版本、不改 status（文档 8.1）；
-    /// updated_at 由数据库触发器自动刷新；先经带软删过滤器的查询确认存在（Updateable 不走全局过滤器）</summary>
+    /// <summary>保存编辑（草稿）：只更新 content/format/md5/description/tags，不产生版本、不改 status（文档 8.1）。
+    /// 乐观锁：请求携带加载详情时的 updated_at 基准，WHERE 匹配不上（已被他人修改/发布/软删，触发器均已刷新 updated_at）
+    /// 则影响行数为 0，转 30005；updated_at 由数据库触发器自动刷新；先经带软删过滤器的查询确认存在（Updateable 不走全局过滤器）</summary>
     public async Task UpdateAsync(long id, ConfigurationUpdateRequest request)
     {
         var existing = await configurationRepository.GetByIdAsync(id)
             ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置不存在");
         var md5 = OperationHelper.ComputeMd5(request.Content);
-        await configurationRepository.UpdateDraftAsync(id, request.Content, request.Format, md5,
-            request.Description, request.Tags, operatorContext.Operator);
-        await WriteLogAsync("UPDATE", new { resource = "configuration", existing.ConfigurationKey, md5 },
-            existing.NamespaceId, existing.EnvironmentId, existing.GroupId, id);
+        await transactionRunner.ExecuteAsync(async () =>
+        {
+            var affected = await configurationRepository.UpdateDraftAsync(id, request.Content, request.Format, md5,
+                request.Description, request.Tags, operatorContext.Operator, request.ExpectedUpdatedAt!.Value);
+            if (affected == 0)
+                throw new BusinessException(ErrorCode.ConfigurationConcurrentModification, "配置已被他人修改，请刷新页面获取最新内容后重试");
+            await WriteLogAsync("UPDATE", new { resource = "configuration", existing.ConfigurationKey, md5 },
+                existing.NamespaceId, existing.EnvironmentId, existing.GroupId, id);
+        });
     }
 
-    /// <summary>软删除：置 deleted_at；配置是叶子资源，无级联检查。版本与日志保留可审计</summary>
+    /// <summary>软删除：置 deleted_at；配置是叶子资源，无级联检查。版本与日志保留可审计。
+    /// 删除已发布配置会改变组的客户端可见内容，事务提交后失效组指纹缓存（新建/保存草稿只影响 DRAFT 态，客户端不可见，无需失效）</summary>
     public async Task DeleteAsync(long id)
     {
         var existing = await configurationRepository.GetByIdAsync(id)
             ?? throw new BusinessException(ErrorCode.ResourceNotFound, "配置不存在");
-        await configurationRepository.SoftDeleteAsync(id);
-        await WriteLogAsync("DELETE", new { resource = "configuration", existing.ConfigurationKey },
-            existing.NamespaceId, existing.EnvironmentId, existing.GroupId, id);
+        await transactionRunner.ExecuteAsync(async () =>
+        {
+            await configurationRepository.SoftDeleteAsync(id);
+            await WriteLogAsync("DELETE", new { resource = "configuration", existing.ConfigurationKey },
+                existing.NamespaceId, existing.EnvironmentId, existing.GroupId, id);
+        });
+        fingerprintCache.InvalidateAll();
+        changeNotifier.NotifyAll();
     }
 
     /// <summary>版本历史列表：按版本号倒序分页（版本表不设软删除，全量可追溯）</summary>

@@ -12,6 +12,7 @@ public class EnvironmentService(
     EnvironmentRepository environmentRepository,
     ConfigurationGroupRepository configurationGroupRepository,
     OperationLogRepository operationLogRepository,
+    DatabaseTransactionRunner transactionRunner,
     OperatorContext operatorContext)
 {
     /// <summary>环境列表：命名空间过滤可选，按 sort_order 再按创建时间排序（后端方案 7.2）</summary>
@@ -24,11 +25,18 @@ public class EnvironmentService(
         var data = new EnvironmentData(0, request.NamespaceId, request.EnvironmentKey, request.EnvironmentName,
             request.Description, request.SortOrder, Status: 1,
             CreatedAt: DateTimeOffset.UtcNow, UpdatedAt: DateTimeOffset.UtcNow);
-        try { data = await environmentRepository.InsertAsync(data); }
+        try
+        {
+            // 业务写与审计日志同事务：日志写失败时整体回滚，保证「有变更必有审计」
+            await transactionRunner.ExecuteAsync(async () =>
+            {
+                data = await environmentRepository.InsertAsync(data);
+                await WriteLogAsync("CREATE", new { resource = "environment", request.EnvironmentKey },
+                    namespaceId: data.NamespaceId, environmentId: data.Id);
+            });
+        }
         catch (Exception exception) when (OperationHelper.IsUniqueViolation(exception))
         { throw new BusinessException(ErrorCode.EnvironmentKeyConflict, $"环境 key 在命名空间内已存在：{request.EnvironmentKey}"); }
-        await WriteLogAsync("CREATE", new { resource = "environment", request.EnvironmentKey },
-            namespaceId: data.NamespaceId, environmentId: data.Id);
         return EnvironmentResponse.From(data);
     }
 
@@ -38,10 +46,13 @@ public class EnvironmentService(
     {
         var existing = await environmentRepository.GetByIdAsync(id)
             ?? throw new BusinessException(ErrorCode.ResourceNotFound, "环境不存在");
-        await environmentRepository.UpdateAsync(id, request.EnvironmentName, request.Description, request.SortOrder, request.Status);
-        // 审计日志维度带全：上级命名空间 id 从既有记录取，避免日志只挂环境导致审计页缺失命名空间信息
-        await WriteLogAsync("UPDATE", new { resource = "environment", request.EnvironmentName },
-            namespaceId: existing.NamespaceId, environmentId: id);
+        await transactionRunner.ExecuteAsync(async () =>
+        {
+            await environmentRepository.UpdateAsync(id, request.EnvironmentName, request.Description, request.SortOrder, request.Status);
+            // 审计日志维度带全：上级命名空间 id 从既有记录取，避免日志只挂环境导致审计页缺失命名空间信息
+            await WriteLogAsync("UPDATE", new { resource = "environment", request.EnvironmentName },
+                namespaceId: existing.NamespaceId, environmentId: id);
+        });
     }
 
     /// <summary>软删除环境：存在未删除的下级配置组时拒绝（20004）</summary>
@@ -51,9 +62,12 @@ public class EnvironmentService(
             ?? throw new BusinessException(ErrorCode.ResourceNotFound, "环境不存在");
         if (await configurationGroupRepository.ExistsByEnvironmentIdAsync(id))
             throw new BusinessException(ErrorCode.CascadeDeleteConflict, "存在未删除的下级配置组，拒绝删除");
-        await environmentRepository.SoftDeleteAsync(id);
-        await WriteLogAsync("DELETE", new { resource = "environment", id },
-            namespaceId: existing.NamespaceId, environmentId: id);
+        await transactionRunner.ExecuteAsync(async () =>
+        {
+            await environmentRepository.SoftDeleteAsync(id);
+            await WriteLogAsync("DELETE", new { resource = "environment", id },
+                namespaceId: existing.NamespaceId, environmentId: id);
+        });
     }
 
     /// <summary>写审计日志：操作人/客户端 IP 取自当前请求的 OperatorContext</summary>

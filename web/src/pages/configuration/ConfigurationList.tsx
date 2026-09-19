@@ -40,6 +40,7 @@ import type {
   ConfigurationResponse,
   EnvironmentResponse,
   NamespaceResponse,
+  PageResponse,
 } from '@/api/types';
 import StatusTag from '@/components/StatusTag';
 import FormatSelect from '@/components/FormatSelect';
@@ -80,7 +81,8 @@ interface CreateFormValues {
 }
 
 /**
- * 配置项列表页：命名空间/环境/配置组三级级联 + 状态 + Key 关键字组合筛选（全可选，点「查询」手动生效）；
+ * 配置项列表页：命名空间/环境/配置组三级级联 + 状态 + Key 关键字组合筛选（全可选，点「查询」手动生效），
+ * 列表服务端分页（翻页/改每页条数即触发重新加载，查询条件变化时回到第一页）；
  * 行操作：编辑 / 发布 / 下线 / 删除 / 版本历史；支持新建配置。
  */
 export default function ConfigurationList() {
@@ -100,6 +102,9 @@ export default function ConfigurationList() {
     status?: ConfigStatus;
     keyword?: string;
   }>({});
+  // 服务端分页状态：翻页/改每页条数直接改状态触发重载；查询/重置回到第一页
+  const [pageIndex, setPageIndex] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   // 级联下拉数据源
   const [namespaces, setNamespaces] = useState<NamespaceResponse[]>([]);
@@ -173,7 +178,7 @@ export default function ConfigurationList() {
     refreshGroups();
   }, [refreshGroups]);
 
-  // 点「查询」时已生效条件变化即重载（useTableRequest 依赖 fetcher 引用，已防竞态）
+  // 点「查询」时已生效条件或分页状态变化即重载（useTableRequest 依赖 fetcher 引用，已防竞态）
   const fetcher = useCallback(
     () =>
       listConfigurations({
@@ -182,17 +187,20 @@ export default function ConfigurationList() {
         groupId: applied.groupId,
         status: applied.status,
         keyword: applied.keyword || undefined,
+        pageIndex,
+        pageSize,
       }),
-    [applied],
+    [applied, pageIndex, pageSize],
   );
-  const { data, loading, reload } = useTableRequest(fetcher);
+  const { data, loading, reload } = useTableRequest<PageResponse<ConfigurationResponse>>(fetcher);
 
-  // 点「查询」/回车：草稿条件快照生效，触发列表重新加载
+  // 点「查询」/回车：草稿条件快照生效并回到第一页，触发列表重新加载
   const handleSearch = () => {
     setApplied({ namespaceId, environmentId, groupId, status, keyword: keywordInput.trim() });
+    setPageIndex(1);
   };
 
-  // 点「重置」：清空草稿与已生效条件，恢复全量
+  // 点「重置」：清空草稿与已生效条件，恢复全量并回到第一页
   const handleResetFilter = () => {
     setNamespaceId(undefined);
     setEnvironmentId(undefined);
@@ -200,6 +208,7 @@ export default function ConfigurationList() {
     setStatus(undefined);
     setKeywordInput('');
     setApplied({});
+    setPageIndex(1);
   };
 
   /** 发布确认：填变更备注后调用发布接口 */
@@ -570,11 +579,22 @@ export default function ConfigurationList() {
         rowKey="id"
         columns={mergedColumns}
         components={components}
-        dataSource={data ?? []}
+        dataSource={data?.items ?? []}
         loading={loading}
         // 窄窗口下横向滚动，避免内容越过容器
         scroll={{ x: 'max-content' }}
-        pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
+        // 服务端分页：total 来自接口，翻页/改每页条数更新状态触发重载
+        pagination={{
+          current: pageIndex,
+          pageSize,
+          total: data?.total ?? 0,
+          showSizeChanger: true,
+          showTotal: (t) => `共 ${t} 条`,
+          onChange: (page, size) => {
+            setPageIndex(page);
+            setPageSize(size);
+          },
+        }}
         size="middle"
       />
 
